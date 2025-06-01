@@ -48,6 +48,11 @@ private extension Array where Element == UInt8 {
     }
 }
 
+extension Data {
+    /// Hex dump – nice for logs
+    var hex: String { map { String(format: "%02X", $0) }.joined(separator: " ") }
+}
+
 /// 16-byte AES-128 ECB encryption (no padding) via CommonCrypto
 private func aesEncryptECB(key: [UInt8], block: [UInt8]) -> [UInt8] {
     precondition(block.count == 16 && key.count == 16)
@@ -410,7 +415,7 @@ public final class KeyBle: NSObject {
             }
             let frag = fragments[idx]
             print("⬆️  Sending fragment \(idx)/\(fragments.count-1) "
-                + "type \(type) status 0x\(String(format:"%02X",frag.status))")
+                  + "type \(type) status 0x\(String(format:"%02X",frag.status)) - \(frag.data.hex)")
             peripheral.writeValue(frag.data,
                                   for: sendChar,
                                   type: .withResponse)
@@ -500,7 +505,8 @@ extension KeyBle: CBCentralManagerDelegate {
                                advertisementData: [String: Any],
                                rssi RSSI: NSNumber) {
 
-        print("🔎  Found peripheral \(p.identifier) – connecting …")
+        let nameDesc = p.name ?? "(no name)"
+        print("🔎  Found peripheral “\(nameDesc)” @ \(p.identifier) – connecting …")
         central?.stopScan()
         peripheral = p
         connState  = .connected
