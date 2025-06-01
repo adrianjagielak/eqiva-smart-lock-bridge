@@ -67,15 +67,51 @@ private func aesEncryptECB(key: [UInt8], block: [UInt8]) -> [UInt8] {
 
 // MARK: -- Message / Crypto --------------------------------------------------
 
+// de.eq3.ble.key.android.a.a.w.java
 private enum MsgID: UInt8 {
-    case fragmentAck           = 0x00
-    case connectionRequest     = 0x02
-    case connectionInfo        = 0x03
-    case closeConnection       = 0x06
-    case statusRequest         = 0x82     // secure
-    case statusInfo            = 0x83     // secure
-    case command               = 0x87     // secure
-    // …add more if needed
+    case fragmentAck               = 0x00
+    case answerWithoutSecurity     = 0x01
+    case connectionRequest         = 0x02
+    case connectionInfo            = 0x03
+    case pairingRequest            = 0x04
+    case statusChangedNotification = 0x05
+    case closeConnection           = 0x06
+
+    case bootloaderStartApp = 0x10
+    case bootloaderData     = 0x11
+    case bootloaderStatus   = 0x12
+
+    case answerWithSecurity  = 0x81
+    case statusRequest       = 0x82
+    case statusInfo          = 0x83
+    case mountOptionsRequest = 0x84
+    case mountOptionsInfo    = 0x85
+    case mountOptionsSet     = 0x86
+    case command             = 0x87
+    case autoRelockSet       = 0x88
+
+    case pairingSet                       = 0x8A
+    case userListRequest                  = 0x8B
+    case userListInfo                     = 0x8C
+    case userRemove                       = 0x8D
+    case userInfoRequest                  = 0x8E
+    case userInfo                         = 0x8F
+    case userNameSet                      = 0x90
+    case userOptionsSet                   = 0x91
+    case userProgRequest                  = 0x92
+    case userProgInfo                     = 0x93
+    case userProgSet                      = 0x94
+    case autoRelockProgRequest            = 0x95
+    case autoRelockProgInfo               = 0x96
+    case autoRelockProgSet                = 0x97
+    case logRequest                       = 0x98
+    case logInfo                          = 0x99
+    case keyBleApplicationBootloaderCall  = 0x9A
+    case daylightSavingTimeOptionsRequest = 0x9B
+    case daylightSavingTimeOptionsInfo    = 0x9C
+    case daylightSavingTimeOptionsSet     = 0x9D
+    case factoryReset                     = 0x9E
+
     var isSecure: Bool { (rawValue & 0x80) != 0 }
 }
 
@@ -113,8 +149,8 @@ private func crypt(_ input: [UInt8],
     return output
 }
 
-/// 4-byte authentication value as in keyble.js
-private func authentication(for plain: [UInt8],
+/// 4-byte authentication value (keyble.js: compute_authentication_value)
+private func authentication(for padded: [UInt8],
                             originalLen: Int,
                             type: UInt8,
                             sessionNonce: [UInt8],
@@ -123,16 +159,18 @@ private func authentication(for plain: [UInt8],
 
     let nonce = makeNonce(type: type, sessionNonce: sessionNonce, counter: counter)
 
+    // ❶ init - uses ORIGINAL (unpadded) len
     var state = aesEncryptECB(key: key,
                               block: [9] + nonce + .fromUInt16(UInt16(originalLen)))
 
-    // CBC-XOR over padded plaintext
-    for chunkStart in stride(from: 0, to: plain.count, by: 16) {
-        let chunk = Array(plain[chunkStart ..< min(chunkStart + 16, plain.count)])
-            .padded(to: 16)
+    // ❷ CBC over *padded* data
+    for chunkStart in stride(from: 0, to: padded.count, by: 16) {
+        let chunk = Array(padded[chunkStart ..< min(chunkStart + 16, padded.count)])
+                       .padded(to: 16)
         state = aesEncryptECB(key: key, block: state.xor(with: chunk))
     }
 
+    // ❸ final mix
     let s1 = aesEncryptECB(key: key,
                            block: [1] + nonce + [0, 0])
     return Array(Array(state.prefix(4)).xor(with: Array(s1.prefix(4))))
@@ -579,6 +617,9 @@ extension KeyBle: CBPeripheralDelegate {
                 expectedStatus = nil
             }
             restartStatusTimer()
+            
+        case .answerWithSecurity:
+            print("⚠️  Lock rejected our authentication value – check key / crypto")
 
         default:
             break
