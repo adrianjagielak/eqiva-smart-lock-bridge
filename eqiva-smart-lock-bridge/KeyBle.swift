@@ -351,6 +351,7 @@ public final class KeyBle: NSObject {
     private func flushQueue() {
         guard !awaitingAck,
               let (type, payload, completion) = pendingMessages.first,
+              !(type.isSecure && connState != .noncesExchanged),
               let sendChar = sendChar,
               let peripheral = peripheral
         else { return }
@@ -398,11 +399,22 @@ public final class KeyBle: NSObject {
 
     /// Ensure nonces exchanged (secure channel)
     private func ensureNonces() {
-        guard connState == .connected else {
-            ensureConnected(); return
+        guard connState == .connected else {  // already exchanging or done
+            ensureConnected()
+            return
         }
-        localNonce = (0..<8).map { _ in UInt8.random(in: 0...255) }
-        send(message: (.connectionRequest, [userID] + localNonce))
+
+        // build the message just once
+        if !pendingMessages.contains(where: { $0.0 == .connectionRequest }) {
+            localNonce = (0..<8).map { _ in UInt8.random(in: 0...255) }
+
+            // INSERT at index 0 instead of appending
+            pendingMessages.insert((.connectionRequest,
+                                    [userID] + localNonce,
+                                    nil),
+                                   at: 0)
+        }
+        flushQueue()
     }
 
     // MARK: -- Send command convenience -------------------------------------
@@ -513,11 +525,6 @@ extension KeyBle: CBPeripheralDelegate {
         else { return }
 
         print("⬇️  Fragment status 0x\(String(format:"%02X", frag.status))")
-
-        // ACK back to lock if fragment not last
-        if !frag.isLast {
-            send(message: (.fragmentAck, [frag.status]))
-        }
 
         incomingFragments.append(frag)
         if frag.isLast { assembleMessage() }
