@@ -1,12 +1,10 @@
 // KeyBle.swift
-// Simplified Swift implementation for controlling the Eqiva Bluetooth Smart Lock
 
 import Foundation
 import CoreBluetooth
+import CommonCrypto
 
-// MARK: ───────────────────────────────────────────────────────────────────────
-// KEYBLE CLASS
-// ─────────────────────────────────────────────────────────────────────────────
+var macAddressUuid: UUID? = nil
 
 class KeyBle: NSObject {
     // CoreBluetooth
@@ -22,6 +20,8 @@ class KeyBle: NSObject {
         case noncesExchanged = 2
     }
     private var state: ConnectionState = .disconnected
+
+    // Flags
     private var notificationsEnabled = false
     private var handshakeStarted = false
 
@@ -33,27 +33,30 @@ class KeyBle: NSObject {
     private var localSecurityCounter: UInt16 = 1
     private var remoteSecurityCounter: UInt16 = 0
 
-    // Fragment buffer
+    // Fragment buffer for incoming
     private var fragmentBuffer: [MessageFragment] = []
 
     // Status
     var lockStatusID: UInt8?
 
-    // Callbacks
+    // Reconnect timer
+    private var reconnectTimer: Timer?
+
+    // Callbacks (external)
     var onConnected: (() -> Void)?
     var onDisconnected: (() -> Void)?
     var onStatusUpdate: ((StatusInfo) -> Void)?
     var onStatusChange: ((StatusInfo) -> Void)?
 
-    // Queue for commands
+    // Queue for sending commands serially
     let commandQueue = DispatchQueue(label: "KeyBle.commandQueue")
 
-    // Pending callbacks awaiting connectionInfo
+    // Pending callbacks awaiting connectionInfo (post‐handshake)
     private var onConnectionInfoCallbacks: [() -> Void] = []
     private let callbackQueue = DispatchQueue(label: "KeyBle.callbackQueue")
 
     // Semaphore for fragment ACK
-    private var fragmentAckSemaphore = DispatchSemaphore(value: 0)
+    private let fragmentAckSemaphore = DispatchSemaphore(value: 0)
 
     // BLE UUIDs
     private let SERVICE_UUID = CBUUID(string: "58E06900-15D8-11E6-B737-0002A5D5C51B")
@@ -73,9 +76,19 @@ class KeyBle: NSObject {
 
     func start() {
         if centralManager.state == .poweredOn {
-            scanForLock()
+            beginScan()
         } else {
-            print("[KeyBle] central state is \(centralManager.state.rawValue), waiting…")
+            let stateDesc: String
+            switch centralManager.state {
+                case .unknown:      stateDesc = "unknown"
+                case .resetting:    stateDesc = "resetting"
+                case .unsupported:  stateDesc = "unsupported"
+                case .unauthorized: stateDesc = "unauthorized"
+                case .poweredOff:   stateDesc = "poweredOff"
+                case .poweredOn:    stateDesc = "poweredOn"
+                @unknown default:   stateDesc = "(!) <new state>"
+            }
+            print("[KeyBle] centralManager.state is “\(stateDesc)”, waiting…")
         }
     }
 
@@ -90,8 +103,16 @@ class KeyBle: NSObject {
     // SCANNING & CONNECTION
     // ───────────────────────────────────────────────────────────────────────────
 
-    private func scanForLock() {
+    private func beginScan() {
         print("[KeyBle] Scanning for lock…")
+        if let uuid = macAddressUuid {
+            let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
+            if let p = peripherals.first {
+                self.peripheral = p
+                centralManager.connect(p, options: nil)
+                return
+            }
+        }
         centralManager.scanForPeripherals(withServices: [SERVICE_UUID], options: nil)
     }
 
@@ -160,7 +181,7 @@ class KeyBle: NSObject {
     }
 
     // MARK: ───────────────────────────────────────────────────────────────────
-    // ENSURE CONNECTED & NONCES
+    // ENSURE CONNECTED & ENSURE NONCES EXCHANGED
     // ───────────────────────────────────────────────────────────────────────────
 
     private func ensureConnected(completion: @escaping () -> Void) {
@@ -177,12 +198,17 @@ class KeyBle: NSObject {
         if state.rawValue >= ConnectionState.noncesExchanged.rawValue {
             completion()
         } else {
+            // Generate local nonce, enqueue callback, send unencrypted CONNECTION_REQUEST
             localSessionNonce = Data((0..<8).map { _ in UInt8.random(in: 0...255) })
             let payload = Data([userID]) + localSessionNonce
+
             callbackQueue.sync {
                 self.onConnectionInfoCallbacks.append(completion)
             }
-            sendMessage(type: .connectionRequest, payload: payload)
+
+            // Send CONNECTION_REQUEST (unencrypted)
+            _sendRaw(typeID: MessageType.connectionRequest.rawValue, dataBytes: payload, completion: nil)
+            print("[KeyBle] ⬆️ Sending CONNECTION_REQUEST payload: \(payload.hexEncodedString())")
         }
     }
 
@@ -194,10 +220,19 @@ class KeyBle: NSObject {
 
 extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        let stateDesc: String
+        switch central.state {
+            case .unknown:      stateDesc = "unknown"
+            case .resetting:    stateDesc = "resetting"
+            case .unsupported:  stateDesc = "unsupported"
+            case .unauthorized: stateDesc = "unauthorized"
+            case .poweredOff:   stateDesc = "poweredOff"
+            case .poweredOn:    stateDesc = "poweredOn"
+            @unknown default:   stateDesc = "(!) <new state>"
+        }
+        print("[KeyBle] centralManagerDidUpdateState: \(stateDesc)")
         if central.state == .poweredOn {
-            scanForLock()
-        } else {
-            print("[KeyBle] centralManager state changed to \(central.state.rawValue)")
+            beginScan()
         }
     }
 
@@ -206,7 +241,8 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         central.stopScan()
         self.peripheral = peripheral
         peripheral.delegate = self
-        print("[KeyBle] Discovered \(peripheral.name ?? "") @ \(peripheral.identifier.uuidString), connecting…")
+        let nameDesc = peripheral.name ?? "(no name)"
+        print("[KeyBle] Discovered “\(nameDesc)” @ \(peripheral.identifier.uuidString), connecting…")
         central.connect(peripheral, options: nil)
     }
 
@@ -236,14 +272,15 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     private func scheduleReconnect() {
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5.0) {
-            self.start()
+        reconnectTimer?.invalidate()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+            self?.start()
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard error == nil, let services = peripheral.services else {
-            print("[KeyBle] Service discovery error: \(error!.localizedDescription)")
+            print("[KeyBle] Service discovery error: \(error?.localizedDescription ?? "unknown")")
             return
         }
         for s in services where s.uuid == SERVICE_UUID {
@@ -253,24 +290,48 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard error == nil, let chars = service.characteristics else {
-            print("[KeyBle] Char discovery error: \(error!.localizedDescription)")
+            print("[KeyBle] Char discovery error: \(error?.localizedDescription ?? "unknown")")
             return
         }
         for ch in chars {
-            if ch.uuid == SEND_CHAR_UUID { sendChar = ch }
-            else if ch.uuid == RECV_CHAR_UUID { recvChar = ch }
-        }
-        if let recv = recvChar {
-            peripheral.setNotifyValue(true, for: recv)
+            if ch.uuid == SEND_CHAR_UUID {
+                sendChar = ch
+            } else if ch.uuid == RECV_CHAR_UUID {
+                recvChar = ch
+            }
         }
         print("[KeyBle] Ready for communication")
+
+        if let recv = recvChar {
+            // Attempt to subscribe for notifications; if this fails, we’ll proceed anyway
+            peripheral.setNotifyValue(true, for: recv)
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, characteristic.uuid == recvChar?.uuid else {
-            if let e = error { print("[KeyBle] Notification error: \(e.localizedDescription)") }
+        if let err = error {
+            print("[KeyBle] Notification state failed: \(err.localizedDescription)")
+            // Even though subscribe failed, proceed as if notifications are enabled
+            notificationsEnabled = true
+
+            // Kick off handshake if connected but not started
+            if state == .connected && !handshakeStarted {
+                handshakeStarted = true
+                print("[KeyBle] ▶︎ Handshake fallback: starting Status Request despite notification error…")
+                requestStatus()
+            }
+
+            // If handshake already done, invoke pending callbacks
+            if state.rawValue >= ConnectionState.noncesExchanged.rawValue {
+                callbackQueue.sync {
+                    for cb in self.onConnectionInfoCallbacks { cb() }
+                    self.onConnectionInfoCallbacks.removeAll()
+                }
+            }
             return
         }
+        guard characteristic.uuid == recvChar?.uuid else { return }
+
         if characteristic.isNotifying {
             print("[KeyBle] ✅ Notifications enabled")
             notificationsEnabled = true
@@ -294,10 +355,11 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil, let data = characteristic.value else {
-            print("[KeyBle] didUpdateValueFor error: \(error!.localizedDescription)")
+            print("[KeyBle] didUpdateValueFor error: \(error?.localizedDescription ?? "unknown")")
             return
         }
         print("[KeyBle] ⬇️ Raw fragment: \(data.hexEncodedString())")
+
         let rawBytes = [UInt8](data)
         if rawBytes.count >= 2 && rawBytes[1] == 0x00 {
             // FRAGMENT_ACK
@@ -377,7 +439,6 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
                 remoteSecurityCounter = 0
                 state = .noncesExchanged
 
-                // Fire pending callbacks (if notifications already on)
                 if notificationsEnabled {
                     callbackQueue.sync {
                         for cb in self.onConnectionInfoCallbacks { cb() }

@@ -8,7 +8,7 @@
 import Foundation
 
 extension Data {
-    /// XOR with another Data (cycling the key if needed)
+    /// XOR with another Data (cycles key if needed)
     func xor(with key: Data) -> Data {
         guard !key.isEmpty else { return self }
         var result = Data(capacity: count)

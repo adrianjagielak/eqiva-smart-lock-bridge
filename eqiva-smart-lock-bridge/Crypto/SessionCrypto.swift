@@ -18,7 +18,7 @@ func computeNonce(messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter:
     return data
 }
 
-/// Encrypt or decrypt arbitrary‐length payload via AES‐CTR style using AES‐ECB
+/// Encrypts or decrypts arbitrary‐length payload via AES‐CTR style using AES‐ECB
 func cryptData(_ data: Data, messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16, key: Data) -> Data {
     let nonce = computeNonce(messageTypeID: messageTypeID, sessionOpenNonce: sessionOpenNonce, securityCounter: securityCounter)
     let blockCount = Int(ceil(Double(data.count) / Double(kCCBlockSizeAES128)))
@@ -34,7 +34,7 @@ func cryptData(_ data: Data, messageTypeID: UInt8, sessionOpenNonce: Data, secur
     return Data(zip(data, keystream).map { $0 ^ $1 })
 }
 
-/// Compute 4‐byte authentication value (AES‐CMAC‐like) for secure message
+/// Computes 4‐byte authentication value (AES‐CMAC‐like) for a secure message
 func computeAuthenticationValue(data: Data, messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16, key: Data) -> Data {
     let nonce = computeNonce(messageTypeID: messageTypeID, sessionOpenNonce: sessionOpenNonce, securityCounter: securityCounter)
     let paddedData = data.padded(toMultipleOf: 16)

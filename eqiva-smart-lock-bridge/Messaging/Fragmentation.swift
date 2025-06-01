@@ -25,7 +25,7 @@ struct MessageFragment {
     }
 }
 
-/// Split a message (typeID + dataBytes) into 15‐byte chunks with a 1‐byte status prefix
+/// Splits a message (typeID + dataBytes) into 15‐byte chunks with a 1‐byte status prefix
 func fragmentMessage(typeID: UInt8, dataBytes: Data) -> [MessageFragment] {
     var full = Data([typeID]) + dataBytes
     var chunks: [Data] = []
@@ -51,7 +51,7 @@ func fragmentMessage(typeID: UInt8, dataBytes: Data) -> [MessageFragment] {
     return fragments
 }
 
-/// Reassemble full message from received fragments
+/// Reassembles the full message from received fragments
 func assembleMessage(from fragments: [MessageFragment]) -> Data {
     var messageData = Data()
     for frag in fragments {
