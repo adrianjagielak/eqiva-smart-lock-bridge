@@ -1,292 +1,14 @@
-//  A Swift reimplementation of eqiva-homekit-bridge.ts for macOS terminal,
-//  using CoreBluetooth to communicate with an eQ-3/eqiva Bluetooth Smart Lock.
-//  This program maintains a secure BLE connection to the lock, listens for
-//  stdin commands ("lock", "unlock", "open", "status", "toggle"), and outputs
-//  status updates to stdout. It automatically reconnects if disconnected.
 //
-//  Usage:
-//    1. Fill in USER_ID and USER_KEY_HEX below.
-//    2. Build with `swiftc EQivaBridge.swift -o EQivaBridge`
-//    3. Run `./EQivaBridge`
-//    4. Type commands (“lock”, “unlock”, “open”, “status”, “toggle”) followed by Enter.
+//  KeyBle.swift
+//  eqiva-smart-lock-bridge
 //
-//  Dependencies:
-//    - CoreBluetooth
-//    - CommonCrypto (for AES-ECB encryption)
+//  Created by Adrian Jagielak on 01/06/2025.
 //
 
 import Foundation
 import CoreBluetooth
-import CommonCrypto
 
-// MARK: ───────────────────────────────────────────────────────────────────────
-// CONFIGURATION (fill in your own values here)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// As returned from keyble-registeruser
-let USER_ID: UInt8 = 123
-let USER_KEY_HEX = "1234567890abcdef1234567890abcdef"  // 32-hex characters
-
-// BLE Service & Characteristics UUIDs
-let SERVICE_UUID = CBUUID(string: "58E06900-15D8-11E6-B737-0002A5D5C51B")
-let SEND_CHAR_UUID = CBUUID(string: "3141DD40-15DB-11E6-A24B-0002A5D5C51B")
-let RECV_CHAR_UUID = CBUUID(string: "359D4820-15DB-11E6-82BD-0002A5D5C51B")
-
-
-// MARK: ───────────────────────────────────────────────────────────────────────
-// GLOBAL VARIABLES
-// ─────────────────────────────────────────────────────────────────────────────
-
-var _macAddressUuid: UUID? = nil
-
-// MARK: ───────────────────────────────────────────────────────────────────────
-// UTILITIES: AES-ECB, Nonce & Auth computations
-// ─────────────────────────────────────────────────────────────────────────────
-
-fileprivate extension Data {
-    /// XOR this Data with another Data (repeating the key as needed).
-    func xor(with key: Data) -> Data {
-        let result = zip(self, key.cycled(to: count)).map { $0 ^ $1 }
-        return Data(result)
-    }
-
-    /// Repeat or truncate this Data to target length.
-    func cycled(to length: Int) -> Data {
-        guard !isEmpty else { return Data(repeating: 0, count: length) }
-        var data = Data()
-        while data.count < length {
-            data.append(self)
-        }
-        if data.count > length {
-            data = data.subdata(in: 0..<length)
-        }
-        return data
-    }
-
-    /// Pad this Data with zeros up to a multiple of blockSize.
-    func padded(toMultipleOf blockSize: Int) -> Data {
-        let remainder = count % blockSize
-        guard remainder != 0 else { return self }
-        let padLength = blockSize - remainder
-        return self + Data(repeating: 0, count: padLength)
-    }
-
-    func hexEncodedString() -> String {
-        return map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Initialize from hex string (e.g. "a1b2c3").
-    init(hexString: String) {
-        self.init()
-        var hex = hexString
-        hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
-            let byteString = hex[index..<nextIndex]
-            if let num = UInt8(byteString, radix: 16) {
-                self.append(num)
-            }
-            index = nextIndex
-        }
-    }
-}
-
-/// AES-128-ECB encryption of a single block (16 bytes) using CommonCrypto
-func aes128EncryptBlock(_ block: Data, key: Data) -> Data {
-    precondition(block.count == kCCBlockSizeAES128, "Block size must be 16 bytes")
-    precondition(key.count == kCCKeySizeAES128, "Key size must be 16 bytes")
-
-    var outData = Data(repeating: 0, count: kCCBlockSizeAES128)
-    var numBytesEncrypted: size_t = 0
-
-    let outDataCount = outData.count
-    let status = outData.withUnsafeMutableBytes { outBytes in
-        block.withUnsafeBytes { inBytes in
-            key.withUnsafeBytes { keyBytes in
-                CCCrypt(
-                    CCOperation(kCCEncrypt),
-                    CCAlgorithm(kCCAlgorithmAES),
-                    CCOptions(kCCOptionECBMode),
-                    keyBytes.baseAddress, key.count,
-                    nil,
-                    inBytes.baseAddress, block.count,
-                    outBytes.baseAddress, outDataCount,
-                    &numBytesEncrypted
-                )
-            }
-        }
-    }
-
-    precondition(status == kCCSuccess, "AES encryption failed with status \(status)")
-    return outData
-}
-
-/// Compute a 10-byte nonce: [messageTypeID (1B)] + sessionOpenNonce (8B) + [0x00, 0x00 (2B)] + securityCounter (2B)
-func computeNonce(messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16) -> Data {
-    var data = Data()
-    data.append(messageTypeID)
-    data.append(sessionOpenNonce)
-    data.append(contentsOf: [0x00, 0x00])
-    data.append(contentsOf: withUnsafeBytes(of: securityCounter.bigEndian) { Array($0) })
-    return data
-}
-
-/// Encrypt or decrypt a Data array (arbitrary length) part of a secure message.
-/// XOR against a keystream generated by AES-ECB(key, [0x01] + nonce + blockCounter).
-func cryptData(_ data: Data, messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16, key: Data) -> Data {
-    let nonce = computeNonce(messageTypeID: messageTypeID, sessionOpenNonce: sessionOpenNonce, securityCounter: securityCounter)
-    let blockCount = Int(ceil(Double(data.count) / Double(kCCBlockSizeAES128)))
-    var keystream = Data()
-
-    for i in 0..<blockCount {
-        let blockCounter = UInt16(i + 1).bigEndian
-        var inputBlock = Data([0x01])
-        inputBlock.append(nonce)
-        inputBlock.append(contentsOf: withUnsafeBytes(of: blockCounter) { Array($0) })
-        precondition(inputBlock.count == 1 + nonce.count + 2, "Invalid nonce construction")
-        let keyStreamBlock = aes128EncryptBlock(inputBlock, key: key)
-        keystream.append(keyStreamBlock)
-    }
-
-    return Data(zip(data, keystream).map { $0 ^ $1 })
-}
-
-/// Compute the 4-byte authentication value for a secure message.
-/// Following the algorithm in keyble: AES-CMAC-like via ECB chaining.
-func computeAuthenticationValue(data: Data, messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16, key: Data) -> Data {
-    let nonce = computeNonce(messageTypeID: messageTypeID, sessionOpenNonce: sessionOpenNonce, securityCounter: securityCounter)
-    let paddedData = data.padded(toMultipleOf: 16)
-    let dataLengthBE = withUnsafeBytes(of: UInt16(data.count).bigEndian) { Data($0) }
-
-    // Initial vector: [0x09] + nonce + dataLengthBE
-    var iv = Data([0x09])
-    iv.append(nonce)
-    iv.append(dataLengthBE)
-    precondition(iv.count == 1 + nonce.count + dataLengthBE.count)
-
-    // Encrypt IV
-    var encrypted = aes128EncryptBlock(iv, key: key)
-
-    // Process each 16-byte block of paddedData
-    for chunkStart in stride(from: 0, to: paddedData.count, by: 16) {
-        let block = paddedData.subdata(in: chunkStart..<(chunkStart + 16))
-        let xored = Data(zip(encrypted, block).map { $0 ^ $1 })
-        encrypted = aes128EncryptBlock(xored, key: key)
-    }
-
-    // Calculate final: encrypted[0..<4] XOR AES-ECB([0x01] + nonce + [0x00,0x00], key)
-    var iv2 = Data([0x01])
-    iv2.append(nonce)
-    iv2.append(contentsOf: [0x00, 0x00])
-    let encrypted2 = aes128EncryptBlock(iv2, key: key)
-    let authValue = Data(zip(encrypted.prefix(4), encrypted2).map { $0 ^ $1 })
-    return authValue  // 4 bytes
-}
-
-// ───────────────────────────────────────────────────────────────────────────────
-// MESSAGE FRAGMENTATION / PARSING
-// ───────────────────────────────────────────────────────────────────────────────
-
-/// A BLE message fragment (15 bytes of payload + 1 status byte).
-struct MessageFragment {
-    let raw: Data  // 16 bytes: [statusByte][15 bytes payload]
-
-    var statusByte: UInt8 { return raw[0] }
-    var isFirst: Bool { return (statusByte & 0x80) != 0 }
-    var remainingCount: Int { return Int(statusByte & 0x7F) }
-    var isLast: Bool { return remainingCount == 0 }
-    var dataPayload: Data {
-        // If first fragment, the first payload byte is actually the message type
-        if isFirst {
-            return raw.subdata(in: 2..<raw.count)
-        } else {
-            return raw.subdata(in: 1..<raw.count)
-        }
-    }
-}
-
-/// Reconstruct a full message from fragments.
-func assembleMessage(from fragments: [MessageFragment]) -> Data {
-    var messageData = Data()
-    for frag in fragments {
-        messageData.append(frag.dataPayload)
-    }
-    return messageData
-}
-
-/// Helper to split Data into 15-byte chunks, each prefixed by status byte.
-func fragmentMessage(typeID: UInt8, dataBytes: Data) -> [MessageFragment] {
-    // Prepend typeID to dataBytes
-    var full = Data([typeID]) + dataBytes
-    // Split into chunks of 15 bytes
-    var chunks: [Data] = []
-    while !full.isEmpty {
-        let slice = full.prefix(15)
-        chunks.append(Data(slice))
-        full.removeFirst(min(15, full.count))
-    }
-    let total = chunks.count
-    var fragments: [MessageFragment] = []
-    for (i, chunk) in chunks.enumerated() {
-        let isFirst = (i == 0)
-        let rem = total - 1 - i
-        let status: UInt8 = (isFirst ? 0x80 : 0x00) | UInt8(rem & 0x7F)
-        var raw = Data([status])
-        // Pad chunk to 15 bytes if needed
-        var padded = chunk
-        if padded.count < 15 {
-            padded.append(Data(repeating: 0, count: 15 - padded.count))
-        }
-        raw.append(padded)
-        fragments.append(MessageFragment(raw: raw))
-    }
-    return fragments
-}
-
-// ───────────────────────────────────────────────────────────────────────────────
-// MESSAGE TYPES (IDs) & Parsing
-// ───────────────────────────────────────────────────────────────────────────────
-
-// Message type IDs
-enum MessageType: UInt8 {
-    case answerWithoutSecurity = 0x01
-    case connectionRequest      = 0x02
-    case connectionInfo         = 0x03
-    case pairRequest            = 0x04
-    case statusChangedNotify    = 0x05
-    case closeConnection        = 0x06
-    case command                = 0x87
-    case statusRequest          = 0x82
-    case statusInfo             = 0x83
-    case userNameSet            = 0x90
-    // ... add other types as needed
-}
-
-/// Parsed status info fields
-struct StatusInfo {
-    let lockStatusID: UInt8  // 0=UNKNOWN,1=MOVING,2=UNLOCKED,3=LOCKED,4=OPENED
-    let batteryLow: Bool
-    let pairingAllowed: Bool
-}
-
-/// Parse STATUS_INFO message (type 0x83)
-func parseStatusInfo(from data: Data) -> StatusInfo {
-    // data bytes: [byte0, byte1, byte2, ...]
-    // batteryLow = (byte1 & 0x80) != 0
-    // pairingAllowed = (byte1 & 0x01) != 0
-    // lockStatus = byte2 & 0x07
-    let byte1 = data[1]
-    let byte2 = data[2]
-    let batteryLow = (byte1 & 0x80) != 0
-    let pairingAllowed = (byte1 & 0x01) != 0
-    let lockStatus = byte2 & 0x07
-    return StatusInfo(lockStatusID: lockStatus, batteryLow: batteryLow, pairingAllowed: pairingAllowed)
-}
-
-// ───────────────────────────────────────────────────────────────────────────────
-// CORE CLASS: KeyBle
-// ───────────────────────────────────────────────────────────────────────────────
+var macAddressUuid: UUID? = nil
 
 class KeyBle: NSObject {
     // ───────────────────────────────────────────────────────────────────────────
@@ -335,7 +57,7 @@ class KeyBle: NSObject {
     // ───────────────────────────────────────────────────────────────────────────
     // STATUS
     // ───────────────────────────────────────────────────────────────────────────
-    private var lockStatusID: UInt8?
+    var lockStatusID: UInt8?
 
     // ───────────────────────────────────────────────────────────────────────────
     // AUTO-RECONNECT
@@ -368,7 +90,7 @@ class KeyBle: NSObject {
     // ───────────────────────────────────────────────────────────────────────────
     /// All high‐level sends (`lock()`, `unlock()`, `requestStatus()`, etc.) are
     /// dispatched onto this serial queue, ensuring they run one at a time.
-    private let commandQueue = DispatchQueue(label: "KeyBle.commandQueue")
+    let commandQueue = DispatchQueue(label: "KeyBle.commandQueue")
 
     // ───────────────────────────────────────────────────────────────────────────
     // SEMAPHORE FOR FRAGMENT_ACK
@@ -431,7 +153,7 @@ class KeyBle: NSObject {
     // ───────────────────────────────────────────────────────────────────────────
     private func beginScan() {
         print("[KeyBle] Scanning for peripheral...")
-        if let uuid = _macAddressUuid {
+        if let uuid = macAddressUuid {
             let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
             if let p = peripherals.first {
                 self.peripheral = p
@@ -444,61 +166,9 @@ class KeyBle: NSObject {
     }
 
     // ───────────────────────────────────────────────────────────────────────────
-    // HIGH‐LEVEL COMMANDS: enqueued onto commandQueue to serialize
-    // ───────────────────────────────────────────────────────────────────────────
-    func lock() {
-        commandQueue.async {
-            self.sendMessage(type: .command, payload: Data([0x00])) // 0=lock
-        }
-    }
-
-    func unlock() {
-        commandQueue.async {
-            self.sendMessage(type: .command, payload: Data([0x01])) // 1=unlock
-        }
-    }
-
-    func open() {
-        commandQueue.async {
-            if self.lockStatusID == 4 { return } // already open
-            self.sendMessage(type: .command, payload: Data([0x02])) // 2=open
-        }
-    }
-
-    func toggle() {
-        commandQueue.async {
-            guard let status = self.lockStatusID else {
-                self.requestStatus()  // if unknown, just request status first
-                return
-            }
-            switch status {
-                case 2, 4: self.lock()   // if unlocked or opened, lock
-                case 3:   self.unlock() // if locked, unlock
-                default:  print("[KeyBle] Cannot toggle from status \(status)")
-            }
-        }
-    }
-
-    func requestStatus() {
-        commandQueue.async {
-            // Build timestamp [YY,MM,DD,hh,mm,ss]
-            let now = Date()
-            let cal = Calendar.current
-            let year = UInt8(cal.component(.year, from: now) - 2000)
-            let month = UInt8(cal.component(.month, from: now))
-            let day = UInt8(cal.component(.day, from: now))
-            let hour = UInt8(cal.component(.hour, from: now))
-            let minute = UInt8(cal.component(.minute, from: now))
-            let second = UInt8(cal.component(.second, from: now))
-            let payload = Data([year, month, day, hour, minute, second])
-            self.sendMessage(type: .statusRequest, payload: payload)
-        }
-    }
-
-    // ───────────────────────────────────────────────────────────────────────────
     // INTERNAL: SEND A MESSAGE (handles both secure & insecure)
     // ───────────────────────────────────────────────────────────────────────────
-    private func sendMessage(type: MessageType, payload: Data? = nil, completion: (() -> Void)? = nil) {
+    func sendMessage(type: MessageType, payload: Data? = nil, completion: (() -> Void)? = nil) {
         let isSecure = (type.rawValue & 0x80) != 0
 
         func logMessageSent() {
@@ -659,7 +329,7 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        _macAddressUuid = peripheral.identifier
+        macAddressUuid = peripheral.identifier
         state = .connected
         print("[KeyBle] Connected to \(peripheral.identifier.uuidString)")
         onConnected?()
@@ -900,98 +570,3 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
 }
-
-// ───────────────────────────────────────────────────────────────────────────────
-// MAIN CLI LOGIC
-// ───────────────────────────────────────────────────────────────────────────────
-
-let keyBle = KeyBle(userID: USER_ID, userKeyHex: USER_KEY_HEX)
-
-var shouldKeepRunning = true
-
-// Handle status updates
-keyBle.onStatusUpdate = { status in
-    let lockState: String
-    switch status.lockStatusID {
-        case 0: lockState = "UNKNOWN"
-        case 1: lockState = "MOVING"
-        case 2: lockState = "UNLOCKED"
-        case 3: lockState = "LOCKED"
-        case 4: lockState = "OPENED"
-        default: lockState = "INVALID"
-    }
-    let battery = status.batteryLow ? "LOW" : "OK"
-    let pairing = status.pairingAllowed ? "YES" : "NO"
-    let output: [String: String] = [
-        "lock_status": lockState,
-        "battery": battery,
-        "pairing_allowed": pairing
-    ]
-    if let json = try? JSONSerialization.data(withJSONObject: output, options: []),
-       let str = String(data: json, encoding: .utf8) {
-        print("[StatusUpdate] \(str)")
-    } else {
-        print("[StatusUpdate] status=\(lockState) battery=\(battery) pairing=\(pairing)")
-    }
-}
-
-// Handle status changes (optional)
-keyBle.onStatusChange = { status in
-    // Already printed by onStatusUpdate, but you could do extra logic here.
-}
-
-// Start connection
-keyBle.start()
-
-// Simulate incoming requests (TODO DEBUG)
-DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-    print("[KeyBle] (TODO DEBUG) calling requestStatus()")
-    keyBle.requestStatus()
-}
-DispatchQueue.main.asyncAfter(deadline: .now() + 50) {
-    print("[KeyBle] (TODO DEBUG) calling unlock()")
-    keyBle.unlock()
-}
-DispatchQueue.main.asyncAfter(deadline: .now() + 70) {
-    print("[KeyBle] (TODO DEBUG) calling lock()")
-    keyBle.lock()
-}
-
-// Read stdin in background (external commands)
-DispatchQueue.global(qos: .background).async {
-    let input = FileHandle.standardInput
-    while shouldKeepRunning {
-        if let lineData = try? input.read(upToCount: 1024), !lineData.isEmpty {
-            if let cmd = String(data: lineData, encoding: .utf8)?
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                                .lowercased() {
-                switch cmd {
-                    case "lock":
-                        keyBle.lock()
-                    case "unlock":
-                        keyBle.unlock()
-                    case "open":
-                        keyBle.open()
-                    case "status":
-                        keyBle.requestStatus()
-                    case "toggle":
-                        keyBle.toggle()
-                    case "exit", "quit":
-                        shouldKeepRunning = false
-                        keyBle.disconnect()
-                        exit(0)
-                    default:
-                        print("[CLI] Unknown command: \(cmd)")
-                }
-            }
-        } else {
-            // stdin closed or EOF
-            shouldKeepRunning = false
-            keyBle.disconnect()
-            exit(0)
-        }
-    }
-}
-
-// Keep the RunLoop alive
-RunLoop.main.run()
