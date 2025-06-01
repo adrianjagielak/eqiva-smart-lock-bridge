@@ -1,49 +1,44 @@
-//
-//  KeyBle+Commands.swift
-//  eqiva-smart-lock-bridge
-//
-//  Created by Adrian Jagielak on 01/06/2025.
-//
+// KeyBle+Commands.swift
+// High-level commands extension for KeyBle
 
 import Foundation
 
 extension KeyBle {
     func lock() {
         commandQueue.async {
-            self.sendMessage(type: .command, payload: Data([0x00])) // 0=lock
+            self.sendMessage(type: .command, payload: Data([0x00]))
         }
     }
 
     func unlock() {
         commandQueue.async {
-            self.sendMessage(type: .command, payload: Data([0x01])) // 1=unlock
+            self.sendMessage(type: .command, payload: Data([0x01]))
         }
     }
 
     func open() {
         commandQueue.async {
-            if self.lockStatusID == 4 { return } // already open
-            self.sendMessage(type: .command, payload: Data([0x02])) // 2=open
+            if self.lockStatusID == 4 { return }
+            self.sendMessage(type: .command, payload: Data([0x02]))
         }
     }
 
     func toggle() {
         commandQueue.async {
             guard let status = self.lockStatusID else {
-                self.requestStatus()  // if unknown, just request status first
+                self.requestStatus()
                 return
             }
             switch status {
-                case 2, 4: self.lock()   // if unlocked or opened, lock
-                case 3:   self.unlock() // if locked, unlock
-                default:  print("[KeyBle] Cannot toggle from status \(status)")
+                case 2, 4: self.lock()
+                case 3:     self.unlock()
+                default:    print("[KeyBle] Cannot toggle from status \(status)")
             }
         }
     }
 
     func requestStatus() {
         commandQueue.async {
-            // Build timestamp [YY,MM,DD,hh,mm,ss]
             let now = Date()
             let cal = Calendar.current
             let year = UInt8(cal.component(.year, from: now) - 2000)

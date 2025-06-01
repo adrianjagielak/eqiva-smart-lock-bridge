@@ -8,50 +8,39 @@
 import Foundation
 
 extension Data {
-    /// XOR this Data with another Data (repeating the key as needed).
+    /// XOR with another Data (cycling the key if needed)
     func xor(with key: Data) -> Data {
-        let result = zip(self, key.cycled(to: count)).map { $0 ^ $1 }
-        return Data(result)
+        guard !key.isEmpty else { return self }
+        var result = Data(capacity: count)
+        for i in 0..<count {
+            result.append(self[i] ^ key[i % key.count])
+        }
+        return result
     }
 
-    /// Repeat or truncate this Data to target length.
-    func cycled(to length: Int) -> Data {
-        guard !isEmpty else { return Data(repeating: 0, count: length) }
-        var data = Data()
-        while data.count < length {
-            data.append(self)
-        }
-        if data.count > length {
-            data = data.subdata(in: 0..<length)
-        }
-        return data
-    }
-
-    /// Pad this Data with zeros up to a multiple of blockSize.
+    /// Pad with zeros up to a multiple of blockSize
     func padded(toMultipleOf blockSize: Int) -> Data {
-        let remainder = count % blockSize
-        guard remainder != 0 else { return self }
-        let padLength = blockSize - remainder
-        return self + Data(repeating: 0, count: padLength)
+        let rem = count % blockSize
+        guard rem != 0 else { return self }
+        return self + Data(repeating: 0, count: blockSize - rem)
     }
 
-    func hexEncodedString() -> String {
-        return map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Initialize from hex string (e.g. "a1b2c3").
+    /// Initialize from hex string
     init(hexString: String) {
         self.init()
         var hex = hexString
         hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
-            let byteString = hex[index..<nextIndex]
-            if let num = UInt8(byteString, radix: 16) {
-                self.append(num)
+        var i = hex.startIndex
+        while i < hex.endIndex {
+            let next = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+            if let b = UInt8(hex[i..<next], radix: 16) {
+                append(b)
             }
-            index = nextIndex
+            i = next
         }
+    }
+
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
     }
 }
