@@ -115,6 +115,7 @@ private func crypt(_ input: [UInt8],
 
 /// 4-byte authentication value as in keyble.js
 private func authentication(for plain: [UInt8],
+                            originalLen: Int,
                             type: UInt8,
                             sessionNonce: [UInt8],
                             counter: UInt16,
@@ -123,7 +124,7 @@ private func authentication(for plain: [UInt8],
     let nonce = makeNonce(type: type, sessionNonce: sessionNonce, counter: counter)
 
     var state = aesEncryptECB(key: key,
-                              block: [9] + nonce + .fromUInt16(UInt16(plain.count)))
+                              block: [9] + nonce + .fromUInt16(UInt16(originalLen)))
 
     // CBC-XOR over padded plaintext
     for chunkStart in stride(from: 0, to: plain.count, by: 16) {
@@ -336,6 +337,7 @@ public final class KeyBle: NSObject {
                                counter: self.localCtr,
                                key: self.userKey)
             let auth   = authentication(for: padded,
+                                        originalLen: payload.count,
                                         type: type.rawValue,
                                         sessionNonce: self.remoteNonce,
                                         counter: self.localCtr,
