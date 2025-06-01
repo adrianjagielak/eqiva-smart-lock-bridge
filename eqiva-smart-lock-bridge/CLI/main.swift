@@ -39,76 +39,71 @@ let keyBle = KeyBle(userID: USER_ID, userKeyHex: USER_KEY_HEX)
 
 var shouldKeepRunning = true
 
-// Handle status updates
-keyBle.onStatusUpdate = { status in
-    let lockState: String
-    switch status.lockStatusID {
-        case 0: lockState = "UNKNOWN"
-        case 1: lockState = "MOVING"
-        case 2: lockState = "UNLOCKED"
-        case 3: lockState = "LOCKED"
-        case 4: lockState = "OPENED"
-        default: lockState = "INVALID"
-    }
-    let battery = status.batteryLow ? "LOW" : "OK"
-    let pairing = status.pairingAllowed ? "YES" : "NO"
-    let output: [String: String] = [
-        "lock_status": lockState,
-        "battery": battery,
-        "pairing_allowed": pairing
-    ]
-    if let json = try? JSONSerialization.data(withJSONObject: output, options: []),
-       let str = String(data: json, encoding: .utf8) {
-        print("[StatusUpdate] \(str)")
-    } else {
-        print("[StatusUpdate] status=\(lockState) battery=\(battery) pairing=\(pairing)")
-    }
-}
-
-// Handle status changes (optional)
-keyBle.onStatusChange = { status in
-    // Already printed by onStatusUpdate, but you could do extra logic here.
-}
+//// Handle status updates
+//keyBle.onStatusUpdate = { status in
+////    let lockState: String
+////    switch status.lockStatusID {
+////        case 0: lockState = "UNKNOWN"
+////        case 1: lockState = "MOVING"
+////        case 2: lockState = "UNLOCKED"
+////        case 3: lockState = "LOCKED"
+////        case 4: lockState = "OPENED"
+////        default: lockState = "INVALID"
+////    }
+////    let battery = status.batteryLow ? "LOW" : "OK"
+////    let pairing = status.pairingAllowed ? "YES" : "NO"
+////    let output: [String: String] = [
+////        "lock_status": lockState,
+////        "battery": battery,
+////        "pairing_allowed": pairing
+////    ]
+////    if let json = try? JSONSerialization.data(withJSONObject: output, options: []),
+////       let str = String(data: json, encoding: .utf8) {
+////        print("[StatusUpdate] \(str)")
+////    } else {
+////        print("[StatusUpdate] status=\(lockState) battery=\(battery) pairing=\(pairing)")
+////    }
+//}
 
 // Start connection
 keyBle.start()
-
+    
 // Simulate incoming requests (TODO DEBUG)
 DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-    print("[KeyBle] (TODO DEBUG) calling requestStatus()")
-    keyBle.requestStatus()
+        print("[KeyBle] (TODO DEBUG) calling requestStatus()")
+         keyBle.requestStatus()
 }
 DispatchQueue.main.asyncAfter(deadline: .now() + 50) {
-    print("[KeyBle] (TODO DEBUG) calling unlock()")
+   print("[KeyBle] (TODO DEBUG) calling unlock()")
     keyBle.unlock()
 }
 DispatchQueue.main.asyncAfter(deadline: .now() + 70) {
-    print("[KeyBle] (TODO DEBUG) calling lock()")
-    keyBle.lock()
+   print("[KeyBle] (TODO DEBUG) calling lock()")
+keyBle.lock()
 }
 
 // Read stdin in background (external commands)
 DispatchQueue.global(qos: .background).async {
-    let input = FileHandle.standardInput
-    while shouldKeepRunning {
+ let input = FileHandle.standardInput
+        while shouldKeepRunning {
         if let lineData = try? input.read(upToCount: 1024), !lineData.isEmpty {
             if let cmd = String(data: lineData, encoding: .utf8)?
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .lowercased() {
                 switch cmd {
                     case "lock":
-                        keyBle.lock()
+                    keyBle.lock()
                     case "unlock":
-                        keyBle.unlock()
+                    keyBle.unlock()
                     case "open":
-                        keyBle.open()
+                    keyBle.open()
                     case "status":
-                        keyBle.requestStatus()
+                    keyBle.requestStatus()
                     case "toggle":
-                        keyBle.toggle()
+                    keyBle.toggle()
                     case "exit", "quit":
                         shouldKeepRunning = false
-                        keyBle.disconnect()
+                    keyBle.disconnect()
                         exit(0)
                     default:
                         print("[CLI] Unknown command: \(cmd)")
@@ -120,6 +115,7 @@ DispatchQueue.global(qos: .background).async {
             keyBle.disconnect()
             exit(0)
         }
+    
     }
 }
 
