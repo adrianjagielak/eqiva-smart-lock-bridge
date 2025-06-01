@@ -1,6 +1,3 @@
-//
-//  EQivaBridge.swift
-//
 //  A Swift reimplementation of eqiva-homekit-bridge.ts for macOS terminal,
 //  using CoreBluetooth to communicate with an eQ-3/eqiva Bluetooth Smart Lock.
 //  This program maintains a secure BLE connection to the lock, listens for
@@ -22,7 +19,7 @@ import Foundation
 import CoreBluetooth
 import CommonCrypto
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// MARK: ───────────────────────────────────────────────────────────────────────
 // CONFIGURATION (fill in your own values here)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -36,13 +33,13 @@ let SEND_CHAR_UUID = CBUUID(string: "3141DD40-15DB-11E6-A24B-0002A5D5C51B")
 let RECV_CHAR_UUID = CBUUID(string: "359D4820-15DB-11E6-82BD-0002A5D5C51B")
 
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// MARK: ───────────────────────────────────────────────────────────────────────
 // GLOBAL VARIABLES
 // ─────────────────────────────────────────────────────────────────────────────
 
 var _macAddressUuid: UUID? = nil
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// MARK: ───────────────────────────────────────────────────────────────────────
 // UTILITIES: AES-ECB, Nonce & Auth computations
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -73,9 +70,25 @@ fileprivate extension Data {
         let padLength = blockSize - remainder
         return self + Data(repeating: 0, count: padLength)
     }
-    
+
     func hexEncodedString() -> String {
         return map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Initialize from hex string (e.g. "a1b2c3").
+    init(hexString: String) {
+        self.init()
+        var hex = hexString
+        hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+            let byteString = hex[index..<nextIndex]
+            if let num = UInt8(byteString, radix: 16) {
+                self.append(num)
+            }
+            index = nextIndex
+        }
     }
 }
 
@@ -109,7 +122,7 @@ func aes128EncryptBlock(_ block: Data, key: Data) -> Data {
     return outData
 }
 
-/// Compute a 10-byte nonce: [messageTypeID (1B)] + sessionOpenNonce (8B) + [0x00, 0x00 (2B)] + securityCounter(2B)
+/// Compute a 10-byte nonce: [messageTypeID (1B)] + sessionOpenNonce (8B) + [0x00, 0x00 (2B)] + securityCounter (2B)
 func computeNonce(messageTypeID: UInt8, sessionOpenNonce: Data, securityCounter: UInt16) -> Data {
     var data = Data()
     data.append(messageTypeID)
@@ -171,9 +184,9 @@ func computeAuthenticationValue(data: Data, messageTypeID: UInt8, sessionOpenNon
     return authValue  // 4 bytes
 }
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 // MESSAGE FRAGMENTATION / PARSING
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 
 /// A BLE message fragment (15 bytes of payload + 1 status byte).
 struct MessageFragment {
@@ -184,6 +197,7 @@ struct MessageFragment {
     var remainingCount: Int { return Int(statusByte & 0x7F) }
     var isLast: Bool { return remainingCount == 0 }
     var dataPayload: Data {
+        // If first fragment, the first payload byte is actually the message type
         if isFirst {
             return raw.subdata(in: 2..<raw.count)
         } else {
@@ -201,7 +215,7 @@ func assembleMessage(from fragments: [MessageFragment]) -> Data {
     return messageData
 }
 
-// Helper to split Data into 15-byte chunks, each prefixed by status byte.
+/// Helper to split Data into 15-byte chunks, each prefixed by status byte.
 func fragmentMessage(typeID: UInt8, dataBytes: Data) -> [MessageFragment] {
     // Prepend typeID to dataBytes
     var full = Data([typeID]) + dataBytes
@@ -230,9 +244,9 @@ func fragmentMessage(typeID: UInt8, dataBytes: Data) -> [MessageFragment] {
     return fragments
 }
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 // MESSAGE TYPES (IDs) & Parsing
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 
 // Message type IDs
 enum MessageType: UInt8 {
@@ -258,8 +272,10 @@ struct StatusInfo {
 
 /// Parse STATUS_INFO message (type 0x83)
 func parseStatusInfo(from data: Data) -> StatusInfo {
-    // data bytes: [byte0, byte1, byte2, byte3?, byte4, byte5, ...]
-    // lockStatus = data[2] & 0x07
+    // data bytes: [byte0, byte1, byte2, ...]
+    // batteryLow = (byte1 & 0x80) != 0
+    // pairingAllowed = (byte1 & 0x01) != 0
+    // lockStatus = byte2 & 0x07
     let byte1 = data[1]
     let byte2 = data[2]
     let batteryLow = (byte1 & 0x80) != 0
@@ -268,13 +284,14 @@ func parseStatusInfo(from data: Data) -> StatusInfo {
     return StatusInfo(lockStatusID: lockStatus, batteryLow: batteryLow, pairingAllowed: pairingAllowed)
 }
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 // CORE CLASS: KeyBle
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 
 class KeyBle: NSObject {
-
+    // ───────────────────────────────────────────────────────────────────────────
     // CBCentralManager & CBPeripheral
+    // ───────────────────────────────────────────────────────────────────────────
     private var centralManager: CBCentralManager!
     private var peripheral: CBPeripheral?
 
@@ -282,16 +299,27 @@ class KeyBle: NSObject {
     private var sendChar: CBCharacteristic?
     private var recvChar: CBCharacteristic?
 
-    // State
+    // ───────────────────────────────────────────────────────────────────────────
+    // STATE MACHINE
+    // ───────────────────────────────────────────────────────────────────────────
     private enum ConnectionState: Int {
         case disconnected = 0
         case connected = 1
         case noncesExchanged = 2
-        case secured = 3
     }
     private var state: ConnectionState = .disconnected
 
-    // Security
+    // Once we've called `peripheral.setNotifyValue(true)` on `recvChar`, we set this to true in
+    // didUpdateNotificationStateFor. That ensures we never send any secure fragment until notifications
+    // are truly active.
+    private var notificationsEnabled = false
+
+    // Used to ensure we only trigger the first handshake once.
+    private var handshakeStarted = false
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // SECURITY
+    // ───────────────────────────────────────────────────────────────────────────
     private var userID: UInt8
     private var userKey: Data
     private var localSessionNonce = Data()   // 8 bytes
@@ -299,28 +327,68 @@ class KeyBle: NSObject {
     private var localSecurityCounter: UInt16 = 1
     private var remoteSecurityCounter: UInt16 = 0
 
-    // Fragment buffer
+    // ───────────────────────────────────────────────────────────────────────────
+    // FRAGMENT BUFFER
+    // ───────────────────────────────────────────────────────────────────────────
     private var fragmentBuffer: [MessageFragment] = []
 
-    // Status
+    // ───────────────────────────────────────────────────────────────────────────
+    // STATUS
+    // ───────────────────────────────────────────────────────────────────────────
     private var lockStatusID: UInt8?
 
-    // Auto-reconnect
+    // ───────────────────────────────────────────────────────────────────────────
+    // AUTO-RECONNECT
+    // ───────────────────────────────────────────────────────────────────────────
     private var reconnectTimer: Timer?
 
-    // Callbacks
+    // ───────────────────────────────────────────────────────────────────────────
+    // CALLBACKS (for external use)
+    // ───────────────────────────────────────────────────────────────────────────
+    /// Called once the peripheral is connected, before service/char discovery.
     var onConnected: (() -> Void)?
+    /// Called once the peripheral is (re)disconnected.
     var onDisconnected: (() -> Void)?
+    /// Called whenever a STATUS_INFO arrives (parsed JSON). Runs on main thread.
     var onStatusUpdate: ((StatusInfo) -> Void)?
+    /// Called whenever lock state actually changes (e.g. UNLOCKED→LOCKED).
     var onStatusChange: ((StatusInfo) -> Void)?
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // PROMISE‐LIKE CALLBACKS FOR MULTIPLE “ENSURE NONCES” CALLERS
+    // ───────────────────────────────────────────────────────────────────────────
+    /// Instead of a single `onConnectionInfo`, we store an array of callbacks.
+    /// Every secure‐send that happens before nonces are exchanged will append here.
+    private var onConnectionInfoCallbacks: [() -> Void] = []
+    /// A serial queue to protect onConnectionInfoCallbacks.
+    private let callbackQueue = DispatchQueue(label: "KeyBle.callbackQueue")
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // SERIAL COMMAND QUEUE (to prevent overlapping sends)
+    // ───────────────────────────────────────────────────────────────────────────
+    /// All high‐level sends (`lock()`, `unlock()`, `requestStatus()`, etc.) are
+    /// dispatched onto this serial queue, ensuring they run one at a time.
+    private let commandQueue = DispatchQueue(label: "KeyBle.commandQueue")
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // SEMAPHORE FOR FRAGMENT_ACK
+    // ───────────────────────────────────────────────────────────────────────────
+    private var fragmentAckSemaphore = DispatchSemaphore(value: 0)
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // INITIALIZER
+    // ───────────────────────────────────────────────────────────────────────────
     init(userID: UInt8, userKeyHex: String) {
         self.userID = userID
         self.userKey = Data(hexString: userKeyHex)
         super.init()
+        // CoreBluetooth callbacks come on a background queue
         self.centralManager = CBCentralManager(delegate: self, queue: DispatchQueue.global(qos: .background))
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // PUBLIC API: START / DISCONNECT
+    // ───────────────────────────────────────────────────────────────────────────
     /// Start scanning and connecting to the lock.
     func start() {
         if centralManager.state == .poweredOn {
@@ -337,30 +405,20 @@ class KeyBle: NSObject {
                 @unknown default:   stateDesc = "(!) <new state>"
             }
             print("[KeyBle] centralManager.state is “\(stateDesc)”, waiting…")
-
         }
-        // else wait for centralManagerDidUpdateState
     }
 
-    private func beginScan() {
-        print("[KeyBle] Scanning for peripheral...")
-        if let uuid = _macAddressUuid {
-            // Retrieve by UUID
-            let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
-            if let p = peripherals.first {
-                self.peripheral = p
-                centralManager.connect(p, options: nil)
-                return
-            }
+    func disconnect() {
+        guard let p = peripheral else { return }
+        // Send a clean closeConnection (0x06), then cancel
+        sendMessage(type: .closeConnection) {
+            self.centralManager.cancelPeripheralConnection(p)
         }
-        
-        // TODO: delete this debug line
-        centralManager.scanForPeripherals(withServices: nil, options: nil)
-        
-        // Otherwise scan for service
-        centralManager.scanForPeripherals(withServices: [SERVICE_UUID], options: nil)
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // AUTO‐RECONNECT
+    // ───────────────────────────────────────────────────────────────────────────
     private func scheduleReconnect() {
         reconnectTimer?.invalidate()
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
@@ -368,54 +426,130 @@ class KeyBle: NSObject {
         }
     }
 
-    // MARK: ─────────────────────────────────────────────────────────────────────────
-    // MESSAGE SENDING
-    // ─────────────────────────────────────────────────────────────────────────────
+    // ───────────────────────────────────────────────────────────────────────────
+    // SCANNING & CONNECTION
+    // ───────────────────────────────────────────────────────────────────────────
+    private func beginScan() {
+        print("[KeyBle] Scanning for peripheral...")
+        if let uuid = _macAddressUuid {
+            let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
+            if let p = peripherals.first {
+                self.peripheral = p
+                centralManager.connect(p, options: nil)
+                return
+            }
+        }
+        // Either by service UUID or everything
+        centralManager.scanForPeripherals(withServices: [SERVICE_UUID], options: nil)
+    }
 
-    /// Send a high-level message with given type, payload, optionally secure.
+    // ───────────────────────────────────────────────────────────────────────────
+    // HIGH‐LEVEL COMMANDS: enqueued onto commandQueue to serialize
+    // ───────────────────────────────────────────────────────────────────────────
+    func lock() {
+        commandQueue.async {
+            self.sendMessage(type: .command, payload: Data([0x00])) // 0=lock
+        }
+    }
+
+    func unlock() {
+        commandQueue.async {
+            self.sendMessage(type: .command, payload: Data([0x01])) // 1=unlock
+        }
+    }
+
+    func open() {
+        commandQueue.async {
+            if self.lockStatusID == 4 { return } // already open
+            self.sendMessage(type: .command, payload: Data([0x02])) // 2=open
+        }
+    }
+
+    func toggle() {
+        commandQueue.async {
+            guard let status = self.lockStatusID else {
+                self.requestStatus()  // if unknown, just request status first
+                return
+            }
+            switch status {
+                case 2, 4: self.lock()   // if unlocked or opened, lock
+                case 3:   self.unlock() // if locked, unlock
+                default:  print("[KeyBle] Cannot toggle from status \(status)")
+            }
+        }
+    }
+
+    func requestStatus() {
+        commandQueue.async {
+            // Build timestamp [YY,MM,DD,hh,mm,ss]
+            let now = Date()
+            let cal = Calendar.current
+            let year = UInt8(cal.component(.year, from: now) - 2000)
+            let month = UInt8(cal.component(.month, from: now))
+            let day = UInt8(cal.component(.day, from: now))
+            let hour = UInt8(cal.component(.hour, from: now))
+            let minute = UInt8(cal.component(.minute, from: now))
+            let second = UInt8(cal.component(.second, from: now))
+            let payload = Data([year, month, day, hour, minute, second])
+            self.sendMessage(type: .statusRequest, payload: payload)
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // INTERNAL: SEND A MESSAGE (handles both secure & insecure)
+    // ───────────────────────────────────────────────────────────────────────────
     private func sendMessage(type: MessageType, payload: Data? = nil, completion: (() -> Void)? = nil) {
         let isSecure = (type.rawValue & 0x80) != 0
-        
+
         func logMessageSent() {
-            // ── DEBUG: log exactly which high‐level message is being SENT ───────────
             switch type {
-              case .command:
-                let byte = payload?.first ?? 0xff
-                print("[KeyBle] ⬆️ Sending COMMAND payload: \(String(format: "%02x", byte))")
-              case .statusRequest:
-                print("[KeyBle] ⬆️ Sending STATUS_REQUEST (encrypted)…")
-              case .connectionRequest:
-                print("[KeyBle] ⬆️ Sending CONNECTION_REQUEST payload: \(payload?.hexEncodedString() ?? "")")
-              default:
-                break
+                case .command:
+                    let byte = payload?.first ?? 0xff
+                    print("[KeyBle] ⬆️ Sending COMMAND payload: \(String(format: "%02x", byte))")
+                case .statusRequest:
+                    print("[KeyBle] ⬆️ Sending STATUS_REQUEST (encrypted)…")
+                case .connectionRequest:
+                    print("[KeyBle] ⬆️ Sending CONNECTION_REQUEST payload: \(payload?.hexEncodedString() ?? "")")
+                default:
+                    break
             }
         }
 
         var dataBytes = Data()
         if isSecure {
-            // Ensure nonces exchanged
+            // Secure: first ensure nonces are exchanged
             ensureNoncesExchanged { [weak self] in
                 guard let self = self else { return }
+                // Now state ≥ .noncesExchanged, so we can encrypt the payload
                 let plainData = payload ?? Data()
-                // Pad to ceil(length,15*?)? Actually pad to multiple of 15? Keyble pads to ceil(len,15) but uses 15 because 1 byte used for type in fragment.
                 let padded = plainData.padded(toMultipleOf: 15)
-                // Encrypt data
-                let crypted = cryptData(padded, messageTypeID: type.rawValue, sessionOpenNonce: self.remoteSessionNonce, securityCounter: self.localSecurityCounter, key: self.userKey)
-                // Append security counter (2 bytes) and authentication value (4 bytes)
+                let crypted = cryptData(
+                    padded,
+                    messageTypeID: type.rawValue,
+                    sessionOpenNonce: self.remoteSessionNonce,
+                    securityCounter: self.localSecurityCounter,
+                    key: self.userKey
+                )
                 var bytes = Data(crypted)
-                // Security counter
+                // Append 2-byte counter (big endian) and 4-byte auth
                 let scBE = self.localSecurityCounter.bigEndian
                 bytes.append(contentsOf: withUnsafeBytes(of: scBE) { Array($0) })
-                // Auth value
-                let auth = computeAuthenticationValue(data: padded, messageTypeID: type.rawValue, sessionOpenNonce: self.remoteSessionNonce, securityCounter: self.localSecurityCounter, key: self.userKey)
+                let auth = computeAuthenticationValue(
+                    data: padded,
+                    messageTypeID: type.rawValue,
+                    sessionOpenNonce: self.remoteSessionNonce,
+                    securityCounter: self.localSecurityCounter,
+                    key: self.userKey
+                )
                 bytes.append(auth)
                 self.localSecurityCounter &+= 1
+
                 dataBytes = bytes
                 logMessageSent()
                 self._sendFragments(typeID: type.rawValue, dataBytes: dataBytes, completion: completion)
             }
         } else {
-            // Unsecured: ensure connected then send directly
+            // Unsecured: only ensure connected, then send raw
             ensureConnected { [weak self] in
                 guard let self = self else { return }
                 dataBytes = payload ?? Data()
@@ -430,22 +564,17 @@ class KeyBle: NSObject {
         print("[KeyBle] About to send fragment: typeID: \(String(format: "%02x", typeID)), dataBytes: \(dataBytes.hexEncodedString())")
         guard let sendC = sendChar, let peripheral = peripheral else { return }
         let fragments = fragmentMessage(typeID: typeID, dataBytes: dataBytes)
-        // Use dispatch group to wait for ACKs
+
         let group = DispatchGroup()
         for frag in fragments {
             group.enter()
             print("[KeyBle] Sending fragment: typeID: \(String(format: "%02x", typeID)), dataBytes: \(dataBytes.hexEncodedString())")
-            // Write fragment
             peripheral.writeValue(frag.raw, for: sendC, type: .withResponse)
-            if !frag.isLast {
-                // Wait for FRAGMENT_ACK in didUpdateValue
-                waitForFragmentAck {
-                    group.leave()
-                }
-                group.wait()  // Block until ACK received
-            } else {
+            // Always wait for the lock’s FRAGMENT_ACK, even if this is the last fragment
+            waitForFragmentAck {
                 group.leave()
             }
+            group.wait()
         }
         group.notify(queue: DispatchQueue.global()) {
             completion?()
@@ -453,7 +582,6 @@ class KeyBle: NSObject {
     }
 
     /// Semaphore-style wait for next FRAGMENT_ACK.
-    private var fragmentAckSemaphore = DispatchSemaphore(value: 0)
     private func waitForFragmentAck(completion: @escaping () -> Void) {
         DispatchQueue.global().async {
             self.fragmentAckSemaphore.wait()
@@ -461,62 +589,14 @@ class KeyBle: NSObject {
         }
     }
 
-    // MARK: ─────────────────────────────────────────────────────────────────────────
-    // HIGH-LEVEL COMMANDS
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    func lock() {
-        // TODO
-//        if lockStatusID == 3 { return }  already locked
-        sendMessage(type: .command, payload: Data([0x00])) // 0=lock
-    }
-
-    func unlock() {
-        // TODO
-//        if lockStatusID == 2 { return }
-        sendMessage(type: .command, payload: Data([0x01])) // 1=unlock
-    }
-
-    func open() {
-        if lockStatusID == 4 { return }
-        sendMessage(type: .command, payload: Data([0x02])) // 2=open
-    }
-
-    func toggle() {
-        guard let status = lockStatusID else {
-            requestStatus()
-            return
-        }
-        switch status {
-            case 2, 4: lock()
-            case 3: unlock()
-            default: print("[KeyBle] Cannot toggle from status \(status)")
-        }
-    }
-
-    func requestStatus() {
-        // Construct date payload: [year-2000, month, day, hour, min, sec]
-        let now = Date()
-        let cal = Calendar.current
-        let year = UInt8(cal.component(.year, from: now) - 2000)
-        let month = UInt8(cal.component(.month, from: now))
-        let day = UInt8(cal.component(.day, from: now))
-        let hour = UInt8(cal.component(.hour, from: now))
-        let minute = UInt8(cal.component(.minute, from: now))
-        let second = UInt8(cal.component(.second, from: now))
-        let payload = Data([year, month, day, hour, minute, second])
-        sendMessage(type: .statusRequest, payload: payload)
-    }
-
-    // MARK: ─────────────────────────────────────────────────────────────────────────
-    // CONNECTION & NONCE HANDSHAKE
-    // ─────────────────────────────────────────────────────────────────────────────
-
+    // ───────────────────────────────────────────────────────────────────────────
+    // ENSURE CONNECTED & ENSURE NONCES EXCHANGED
+    // ───────────────────────────────────────────────────────────────────────────
     private func ensureConnected(completion: @escaping () -> Void) {
         if state.rawValue >= ConnectionState.connected.rawValue {
             completion()
         } else {
-            // Wait for connected event
+            // Wait until didConnect calls onConnected
             onConnected = {
                 completion()
             }
@@ -527,39 +607,30 @@ class KeyBle: NSObject {
         if state.rawValue >= ConnectionState.noncesExchanged.rawValue {
             completion()
         } else {
-            // Send CONNECTION_REQUEST
+            // We haven't yet sent a CONNECTION_REQUEST or received CONNECTION_INFO.
+            // Generate a local nonce, send unencrypted CONNECTION_REQUEST, then push the
+            // `completion` onto onConnectionInfoCallbacks so that when CONNECTION_INFO arrives,
+            // all pending callers get unblocked.
             localSessionNonce = Data((0..<8).map { _ in UInt8.random(in: 0...255) })
             let payload = Data([userID]) + localSessionNonce
-            sendMessage(type: .connectionRequest, payload: payload) {
-                // Wait for CONNECTION_INFO in didUpdateValue
-                self.onConnectionInfo = {
-                    completion()
-                }
+
+            // Enqueue the completion into our array:
+            callbackQueue.sync {
+                self.onConnectionInfoCallbacks.append(completion)
             }
+
+            // Now send the unencrypted CONNECTION_REQUEST. We do not block here—once the lock
+            // replies with CONNECTION_INFO, dispatchMessage(type: .connectionInfo) will fire all callbacks.
+            sendMessage(type: .connectionRequest, payload: payload)
         }
     }
 
-    // Callback for CONNECTION_INFO
-    private var onConnectionInfo: (() -> Void)?
-
-    // MARK: ─────────────────────────────────────────────────────────────────────────
-    // DISCONNECT
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    func disconnect() {
-        guard let p = peripheral else { return }
-        sendMessage(type: .closeConnection) {
-            self.centralManager.cancelPeripheralConnection(p)
-        }
-    }
+    // ───────────────────────────────────────────────────────────────────────────
+    // CBCentralManagerDelegate & CBPeripheralDelegate
+    // ───────────────────────────────────────────────────────────────────────────
 }
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
-// CBCentralManagerDelegate & CBPeripheralDelegate
-// ─────────────────────────────────────────────────────────────────────────────
-
 extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
-
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         let stateDesc: String
         switch central.state {
@@ -584,7 +655,6 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         peripheral.delegate = self
         let nameDesc = peripheral.name ?? "(no name)"
         print("[KeyBle] Discovered “\(nameDesc)” @ \(peripheral.identifier.uuidString), attempting to connect…")
-        peripheral.delegate = self
         central.connect(peripheral, options: nil)
     }
 
@@ -608,6 +678,11 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         state = .disconnected
         onDisconnected?()
         onDisconnected = nil
+        // Reset flags so that if we reconnect afresh, we’ll redo handshake
+        notificationsEnabled = false
+        handshakeStarted = false
+        // Clear any pending onConnectionInfoCallbacks (they should all error out)
+        callbackQueue.sync { self.onConnectionInfoCallbacks.removeAll() }
         scheduleReconnect()
     }
 
@@ -635,34 +710,48 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
                 recvChar = ch
             }
         }
+        // As soon as we find recvChar, request notifications. We do NOT send any secure fragment until
+        // didUpdateNotificationStateFor tells us `isNotifying == true`.
         if let recv = recvChar {
             peripheral.setNotifyValue(true, for: recv)
         }
         print("[KeyBle] Ready for communication")
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            print("[KeyBle] ▶︎ Automatically kicking off nonce‐handshake (Status Request)…")
-            keyBle.requestStatus()
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-            print("[KeyBle] (TODO DEBUG) calling requestStatus()")
-            keyBle.requestStatus()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: {
-            print("[KeyBle] (TODO DEBUG) calling requestStatus()")
-            keyBle.requestStatus()
-        })
-        DispatchQueue.main.asyncAfter(deadline: .now() + 180, execute: {
-            print("[KeyBle] (TODO DEBUG) calling unlock()")
-            keyBle.unlock()
-        })
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateNotificationStateFor characteristic: CBCharacteristic,
+                    error: Error?) {
         if let err = error {
-            // TODO: ignore?
             print("[KeyBle] Notification state failed: \(err.localizedDescription)")
+            return
+        }
+        guard characteristic.uuid == recvChar?.uuid else { return }
+
+        if characteristic.isNotifying {
+            // Now iOS is truly subscribed to notifications on recvChar.
+            print("[KeyBle] ✅ Notifications enabled on recvChar.")
+            notificationsEnabled = true
+
+            // If we’ve never started the handshake yet, do so now:
+            if state == .connected && !handshakeStarted {
+                handshakeStarted = true
+                // Kick off one STATUS_REQUEST (this will trigger ensureNoncesExchanged → CONNECTION_REQUEST).
+                print("[KeyBle] ▶︎ Automatically kicking off nonce‐handshake (Status Request)…")
+                requestStatus()
+            }
+
+            // If state ≥ .noncesExchanged, it means we've just handled CONNECTION_INFO but were waiting
+            // on notifications. Now that notifications are on, run all pending callbacks.
+            if state.rawValue >= ConnectionState.noncesExchanged.rawValue {
+                callbackQueue.sync {
+                    for cb in self.onConnectionInfoCallbacks {
+                        cb()
+                    }
+                    self.onConnectionInfoCallbacks.removeAll()
+                }
+            }
+        } else {
+            print("[KeyBle] ⚠️ Notifications disabled on recvChar unexpectedly.")
         }
     }
 
@@ -672,39 +761,24 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
             return
         }
 
-        // 1) Print the raw 16‐byte fragment exactly as received:
+        // 1) Print raw fragment
         print("[KeyBle] ⬇️ Raw fragment: \(data.hexEncodedString())")
 
-        // 2) *If* this is a FRAGMENT_ACK (typeID = 0x00), signal the semaphore and bail out:
-        //    Note: in the assembled full data, the first byte would have been the typeID.
-        //    But because you strip off the first “typeID”/“status” bytes in assembleMessage,
-        //    the very first payload byte is the fragment‐ID itself. In other words,
-        //    dataPayload[0] is the FRAGMENT_ACK’s “fragment_id”. But the “typeID = 0x00”
-        //    was already in the byte just before that, so you must look at `fragment.dataPayload[0]`
-        //    *after* reassembling a single‐fragment message. For simplicity, you can detect
-        //    “FRAGMENT_ACK” earlier, before you even assemble the full. In this BLE‐fragment path,
-        //    the lock will send exactly one fragment whose “payload index 0” is the FRAGMENT_ACK ID.
-        //
-        //    Because the lock’s raw fragment is:  [statusByte][0x00][fragmentID][…padding…],
-        //    we can check raw[1] == 0x00 to know “this is FRAGMENT_ACK.”
-        //
-        //    So: if raw[1] == 0x00, we know we have a FRAGMENT_ACK. Just signal and return.
+        // 2) If this is FRAGMENT_ACK (raw[1] == 0x00), signal semaphore and return:
         let rawBytes = [UInt8](data)
         if rawBytes.count >= 2 && rawBytes[1] == 0x00 {
-            // the lock just sent us “statusByte=0x80” + “0x00” + “fragmentID”
-            // ⇒ this is FRAGMENT_ACK. Wake up the semaphore.
+            // FRAGMENT_ACK has arrived
             fragmentAckSemaphore.signal()
             return
         }
 
-        // 3) Parse the fragment into our MessageFragment struct and show its fields:
+        // 3) Otherwise, parse it as a normal fragment
         let fragment = MessageFragment(raw: data)
         print("""
             [KeyBle]   Fragment → isFirst:\(fragment.isFirst) \
             remaining:\(fragment.remainingCount)  payload:\(fragment.dataPayload.hexEncodedString())
             """)
 
-        // 4) Otherwise, handle this as normal BLE‐fragmented data
         fragmentBuffer.append(fragment)
         if fragment.isLast {
             let full = assembleMessage(from: fragmentBuffer)
@@ -713,7 +787,7 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
             handleDecodedMessage(full)
         }
     }
-    
+
     func peripheral(_ peripheral: CBPeripheral,
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
@@ -724,13 +798,12 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
 
-    // MARK: ─────────────────────────────────────────────────────────────────────────
+    // ───────────────────────────────────────────────────────────────────────────
     // MESSAGE HANDLING
-    // ─────────────────────────────────────────────────────────────────────────────
-
+    // ───────────────────────────────────────────────────────────────────────────
     private func handleDecodedMessage(_ data: Data) {
         guard data.count >= 1 else {
-            print("[KeyBle] ⚠️ handleMessage got <1 byte, ignoring")
+            print("[KeyBle] ⚠️ handleDecodedMessage got <1 byte, ignoring")
             return
         }
         let typeID = data[0]
@@ -738,7 +811,7 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
         print("[KeyBle] ▶︎ Dispatching message type=0x\(String(format: "%02x", typeID)), rawPayload=\(payload.hexEncodedString())")
 
         if (typeID & 0x80) != 0 {
-            // Secure message: separate counter/auth, decrypt, verify.
+            // Secure message: decrypt + auth
             guard payload.count >= 6 else {
                 print("[KeyBle]   ⚠️ Secure payload <6 bytes, ignoring")
                 return
@@ -750,17 +823,21 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
 
             print("[KeyBle]   Secure → encData=\(encData.hexEncodedString()) counter=\(msgCounter) auth=\(msgAuth.hexEncodedString())")
 
-            // Decrypt:
-            let decrypted = cryptData(encData,
-                                      messageTypeID: typeID,
-                                      sessionOpenNonce: localSessionNonce,
-                                      securityCounter: msgCounter,
-                                      key: userKey)
-            let computedAuth = computeAuthenticationValue(data: decrypted,
-                                                          messageTypeID: typeID,
-                                                          sessionOpenNonce: localSessionNonce,
-                                                          securityCounter: msgCounter,
-                                                          key: userKey)
+            // Decrypt
+            let decrypted = cryptData(
+                encData,
+                messageTypeID: typeID,
+                sessionOpenNonce: localSessionNonce,
+                securityCounter: msgCounter,
+                key: userKey
+            )
+            let computedAuth = computeAuthenticationValue(
+                data: decrypted,
+                messageTypeID: typeID,
+                sessionOpenNonce: localSessionNonce,
+                securityCounter: msgCounter,
+                key: userKey
+            )
             if msgAuth != computedAuth {
                 print("[KeyBle]   ⚠️ Invalid authentication: got \(msgAuth.hexEncodedString()), expected \(computedAuth.hexEncodedString())")
                 return
@@ -769,106 +846,64 @@ extension KeyBle: CBCentralManagerDelegate, CBPeripheralDelegate {
             print("[KeyBle]   Decrypted payload for type=0x\(String(format: "%02x", typeID)): \(decrypted.hexEncodedString())")
             dispatchMessage(typeID: typeID, payload: decrypted)
         } else {
-            // Unsecured:
+            // Unsecured
             dispatchMessage(typeID: typeID, payload: payload)
         }
     }
 
     private func dispatchMessage(typeID: UInt8, payload: Data) {
         guard let msgType = MessageType(rawValue: typeID) else {
-            print("[KeyBle]   ⚠️ Unknown message type \(typeID)")
+            print("[KeyBle]   ⚠️ Unknown message type 0x\(String(format: "%02x", typeID))")
             return
         }
         switch msgType {
             case .connectionInfo:
-                print("[KeyBle] ◀︎ Received CONNECTION_INFO payload: \(payload.hexEncodedString())")
-                // payload: [userID(1B), remoteSessionNonce(8B), bootldrVer(1B), appVer(1B)]
+                // payload: [userID(1B), remoteNonce(8B), bootldrVer(1B), appVer(1B)]
                 guard payload.count >= 10 else { return }
+                print("[KeyBle] ◀︎ Received CONNECTION_INFO payload: \(payload.hexEncodedString())")
 
-                // ─── 1) Extract lock’s nonce (bytes 1–8 of payload), reset counters ───────────────
+                // 1) Extract remote nonce, reset counters
                 remoteSessionNonce = payload.subdata(in: 1..<9)
                 localSecurityCounter = 1
                 remoteSecurityCounter = 0
                 state = .noncesExchanged
 
-                // ─── 2) Wake up notifications for “recvChar” (CCCD is now active) ─────────────
-                if let recvCh = self.recvChar {
-                    print("[KeyBle] Subscribing for notifications on \(recvCh.uuid.uuidString) (post‐handshake)")
-                    peripheral?.setNotifyValue(true, for: recvCh)
-                } else {
-                    print("[KeyBle] ⚠️ recvChar is nil; cannot subscribe.")
+                // 2) Now that we have the lock’s nonce, re-subscribe to notifications
+                //    so that we’re guaranteed to catch FRAGMENT_ACK for the encrypted STATUS_REQUEST.
+                if let recv = recvChar {
+                    peripheral?.setNotifyValue(true, for: recv)
+                    print("[KeyBle] ▶︎ Re-subscribing for notifications (post-handshake)…")
                 }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1){
-                
-                    // ─── 3) Signal any pending secure‐send caller (e.g. command/status) ────────────
-                self.onConnectionInfo?()
-                self.onConnectionInfo = nil
 
-                    // ─── 4) Immediately send an encrypted STATUS_REQUEST ▹ type 0x82 ──────────────
-                    // Building the 6‐byte [YY,MM,DD,hh,mm,ss] timestamp payload:
-                    let now = Date()
-                    let cal = Calendar.current
-                    let year = UInt8(cal.component(.year, from: now) - 2000)
-                    let month = UInt8(cal.component(.month, from: now))
-                    let day = UInt8(cal.component(.day, from: now))
-                    let hour = UInt8(cal.component(.hour, from: now))
-                    let minute = UInt8(cal.component(.minute, from: now))
-                    let second = UInt8(cal.component(.second, from: now))
-                    let tsPayload = Data([year, month, day, hour, minute, second])
+                // Do NOT fire callbacks here.  Wait until didUpdateNotificationStateFor sees isNotifying.
 
-                self.sendMessage(type: .statusRequest, payload: tsPayload)
-
-            }
-            
-
-            case .statusInfo:
+        case .statusInfo:
                 print("[KeyBle] ◀︎ Received STATUS_INFO payload: \(payload.hexEncodedString())")
-                // Parse and emit
                 let status = parseStatusInfo(from: payload)
-                onStatusUpdate?(status)
-                // Detect status change
-                if lockStatusID != status.lockStatusID {
-                    lockStatusID = status.lockStatusID
-                    onStatusChange?(status)
+                DispatchQueue.main.async {
+                    self.onStatusUpdate?(status)
+                    if self.lockStatusID != status.lockStatusID {
+                        self.lockStatusID = status.lockStatusID
+                        self.onStatusChange?(status)
+                    }
                 }
-            
+                // If you want periodic polling, schedule it _here_ after receiving a valid STATUS_INFO:
+                // DispatchQueue.main.asyncAfter(deadline: .now() + 30) { self.requestStatus() }
+
             case .statusChangedNotify:
                 print("[KeyBle] ◀︎ Received STATUS_CHANGED_NOTIFY")
-                requestStatus()
+                // On a notify, immediately enqueue another requestStatus
+                self.requestStatus()
 
             default:
                 print("[KeyBle]   ⚠️ Unhandled msgType=\(msgType) (0x\(String(format: "%02x", typeID)))")
         }
     }
-
 }
 
-// MARK: ─────────────────────────────────────────────────────────────────────────────
-// DATA Hex String -> Data initializer
-// ─────────────────────────────────────────────────────────────────────────────
-
-fileprivate extension Data {
-    init(hexString: String) {
-        self.init()
-        var hex = hexString
-        // Remove non-hex chars
-        hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
-            let byteString = hex[index..<nextIndex]
-            if let num = UInt8(byteString, radix: 16) {
-                self.append(num)
-            }
-            index = nextIndex
-        }
-    }
-}
-
-// MARK: ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 // MAIN CLI LOGIC
-// ─────────────────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────────────────
 
 let keyBle = KeyBle(userID: USER_ID, userKeyHex: USER_KEY_HEX)
 
@@ -887,7 +922,7 @@ keyBle.onStatusUpdate = { status in
     }
     let battery = status.batteryLow ? "LOW" : "OK"
     let pairing = status.pairingAllowed ? "YES" : "NO"
-    let output = [
+    let output: [String: String] = [
         "lock_status": lockState,
         "battery": battery,
         "pairing_allowed": pairing
@@ -900,21 +935,36 @@ keyBle.onStatusUpdate = { status in
     }
 }
 
-// Handle status changes
+// Handle status changes (optional)
 keyBle.onStatusChange = { status in
-    // Could signal specific events; here we reuse onStatusUpdate output
-    // Already printed in onStatusUpdate
+    // Already printed by onStatusUpdate, but you could do extra logic here.
 }
 
 // Start connection
 keyBle.start()
 
-// Read stdin in background
+// Simulate incoming requests (TODO DEBUG)
+DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+    print("[KeyBle] (TODO DEBUG) calling requestStatus()")
+    keyBle.requestStatus()
+}
+DispatchQueue.main.asyncAfter(deadline: .now() + 50) {
+    print("[KeyBle] (TODO DEBUG) calling unlock()")
+    keyBle.unlock()
+}
+DispatchQueue.main.asyncAfter(deadline: .now() + 70) {
+    print("[KeyBle] (TODO DEBUG) calling lock()")
+    keyBle.lock()
+}
+
+// Read stdin in background (external commands)
 DispatchQueue.global(qos: .background).async {
     let input = FileHandle.standardInput
     while shouldKeepRunning {
         if let lineData = try? input.read(upToCount: 1024), !lineData.isEmpty {
-            if let cmd = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            if let cmd = String(data: lineData, encoding: .utf8)?
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .lowercased() {
                 switch cmd {
                     case "lock":
                         keyBle.lock()
