@@ -1,464 +1,477 @@
-//  KeyBleAsync.swift
-//  Eqiva-Mac
-//
-//  A modern, async‑await re‑implementation of the Eqiva "Key‑Ble" protocol.
-//  ──────────────────────────────────────────────────────────────────────────────
-//  © 2025 Your‑Name‑Here  •  MIT Licence
-//  Built with the excellent AsyncBluetooth package for a clean concurrency story
-//
-//  This rewrite intentionally *forgets* the historic stream/ACK dance of the
-//  original keyble.js port and exposes a *message*‑centric API:
-//
-//      let lock = try await EqivaLock.connect(userKey:"…")
-//      try await lock.open()
-//      let status = await lock.status
-//
-//  Internally we still respect the device’s 16‑byte fragment format, but that
-//  is kept entirely behind the scenes and sequenced through a single actor so
-//  that *you* never have to think about fragments, counters or queues again.
-//  All public calls are full‑fledged async functions that can happily run in
-//  parallel – the actor makes sure only one BLE exchange is on‑air at a time.
-//
-//  Dependencies:  • Swift 5.10+  • AsyncBluetooth (SPM)  • CommonCrypto
-//  Platform: macOS 11 / iOS 14 or newer (Crypto & async/await baseline)
-//  ──────────────────────────────────────────────────────────────────────────────
+// EqivaLock.swift
+// Modern, message‑based Swift library for eQ‑3 Eqiva Bluetooth Smart Lock
+// Created 2 Jun 2025 – rewritten from the legacy keyble.js logic
+// No async/await – public API uses completion handlers.
+// -----------------------------------------------------------------------------
 
 import Foundation
 import CoreBluetooth
-import AsyncBluetooth       // https://github.com/manolofdez/AsyncBluetooth
 import CommonCrypto
 
-// MARK: ‑‑ Public façade ------------------------------------------------------
+// MARK: – Helper extensions --------------------------------------------------
 
-public actor EqivaLock {
+private extension Array where Element == UInt8 {
+    /// Pretty hex dump (for debugging)
+    var hex: String { map { String(format: "%02X", $0) }.joined(separator: " ") }
 
-    // MARK: Public types
-
-    public enum LockState: UInt8, Codable, Equatable {
-        case unknown  = 0
-        case moving   = 1
-        case unlocked = 2
-        case locked   = 3
-        case opened   = 4
+    /// XOR two equal‑length buffers
+    func xor(_ other: [UInt8]) -> [UInt8] {
+        precondition(count == other.count)
+        return zip(self, other).map(^)
     }
 
-    public struct Status: Sendable {
-        public let state        : LockState
-        public let batteryLow   : Bool
-        public let pairingAllowed: Bool
+    /// Little‑endian UInt16 helpers (protocol specifies LE)
+    static func le(_ value: UInt16) -> [UInt8] { [UInt8(value & 0xFF), UInt8(value >> 8)] }
+    func toUInt16LE(at offset: Int) -> UInt16 {
+        UInt16(self[offset]) | (UInt16(self[offset + 1]) << 8)
     }
 
-    // MARK: Static entry‑point
-
-    /// Scan, connect and complete crypto handshake in one go.
-    /// - Parameter userKeyHex: 32‑char hex AES‑128 key, as shown by keyble‑register.
-    /// - Parameter timeout:    Total time budget for scanning+connecting.
-    /// - Returns: Ready‑to‑use connected `EqivaLock`.
-    public static func connect(address: String? = nil,
-                               userID  : UInt8 = 255,
-                               userKeyHex: String,
-                               timeout : TimeInterval = 15) async throws -> EqivaLock {
-        let lock = EqivaLock(userID: userID, userKeyHex: userKeyHex)
-        try await lock.establishConnection(targetAddress: address, timeout: timeout)
-        return lock
-    }
-
-    // MARK: User‑facing actions ------------------------------------------------
-
-    public func lock()   async throws { try await sendCommand(.lock,    expect: .locked)   }
-    public func unlock() async throws { try await sendCommand(.unlock,  expect: .unlocked) }
-    public func open()   async throws { try await sendCommand(.open,    expect: .opened)   }
-    public func toggle() async throws { try await sendCommand(.toggle,  expect: nil)       }
-
-    /// Ask the lock for its current status *now* (independent of the periodic
-    /// auto‑updates we keep running in the background).
-    public func requestStatus() async throws -> Status {
-        let payload = Self.timestampBytes()
-        let reply = try await sendSecure(.statusRequest, payload: payload)
-        return try Self.parseStatusInfo(from: reply)
-    }
-
-    /// The most recently observed status (updated push + pull).
-    public private(set) var status: Status = .init(state: .unknown, batteryLow: false, pairingAllowed: false)
-
-    /// A stream that yields a new `Status` every time the lock reports an update.
-    public var statusStream: AsyncStream<Status> {
-        AsyncStream { continuation in
-            statusContinuations.append(continuation)
-            continuation.yield(status)      // immediate first value
-        }
-    }
-
-    // MARK: De‑initialisation --------------------------------------------------
-
-    deinit {
-        Task { await underlyingDisconnect() }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // MARK: ‑‑ Private implementation below -----------------------------------
-    // ──────────────────────────────────────────────────────────────────────────
-
-    // MARK: Constants
-
-    private static let serviceUUID = CBUUID(string: "58E06900-15D8-11E6-B737-0002A5D5C51B")
-    private static let sendUUID    = CBUUID(string: "3141DD40-15DB-11E6-A24B-0002A5D5C51B")
-    private static let recvUUID    = CBUUID(string: "359D4820-15DB-11E6-82BD-0002A5D5C51B")
-
-    // MARK: BLE stack
-
-    private let central = CentralManager()
-    private var peripheral: Peripheral!
-
-    // MARK: Crypto session state
-
-    private var userID: UInt8
-    private var userKey: [UInt8]  // 16B
-    private var localNonce  = [UInt8](repeating: 0, count: 8)
-    private var remoteNonce = [UInt8](repeating: 0, count: 8)
-    private var localCtr:  UInt16 = 1
-    private var remoteCtr: UInt16 = 0
-
-    // MARK: Concurrency & callbacks
-
-    private var pendingContinuations: [UInt8: CheckedContinuation<[UInt8], Error>] = [:]
-    private var statusContinuations: [AsyncStream<Status>.Continuation] = []
-
-    // Serialised message inflight protection (BLE can’t do pipelining)
-    private var inflight = false
-
-    // MARK: Init
-
-    init(userID: UInt8, userKeyHex: String) {
-        self.userID  = userID
-        self.userKey = Array<UInt8>(hex: userKeyHex)
-    }
-
-    // MARK: Connection / handshake -------------------------------------------
-
-    private func establishConnection(targetAddress: String?, timeout: TimeInterval) async throws {
-        try await central.waitUntilReady()
-
-        let scan = try await central.scanForPeripherals(withServices: [Self.serviceUUID])
-
-        let stopTask = Task {           // auto stop after timeout
-            try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            await central.stopScan()
-            throw NSError(domain: "EqivaLock", code: 1, userInfo: [NSLocalizedDescriptionKey: "Lock not found within timeout"])
-        }
-
-        do {
-            for try await scanData in scan {
-                if let addr = targetAddress {
-                    guard scanData.peripheral.identifier.uuidString == addr else { continue }
-                }
-                peripheral = scanData.peripheral
-                break
-            }
-        } catch {
-            stopTask.cancel()
-            throw error
-        }
-        stopTask.cancel()
-
-        try await central.connect(peripheral, options: nil)
-
-        // Enable characteristic notification right away (we need answers)
-        try await peripheral.setNotifyValue(true, forCharacteristicWithCBUUID: Self.recvUUID, ofServiceWithCBUUID: Self.serviceUUID)
-
-        // Subscribe to every notification – messages all come through a single chr.
-        peripheral.characteristicValueUpdatedPublisher
-            .filter { $0.characteristic.uuid == Self.recvUUID }
-            .sink { [weak self] update in
-                Task { await self?.handleIncoming(data: update.value) }
-            }.store(in: &cancellables)
-
-        try await performHandshake()
-    }
-
-    private func performHandshake() async throws {
-        // 1. Send Connection Request (userID + random 8‑byte nonce)
-        localNonce = (0..<8).map { _ in UInt8.random(in: .min ... .max) }
-        let connInfo = try await sendPlain(.connectionRequest, payload: [userID] + localNonce)
-
-        // 2. Receive Connection Info with remote nonce
-        guard connInfo.count >= 9 else { throw ProtocolError.badHandshake }
-        userID      = connInfo[0]
-        remoteNonce = Array(connInfo[1...8])
-        remoteCtr   = 0
-        localCtr    = 1
-    }
-
-    // MARK: Public helpers ----------------------------------------------------
-
-    private func sendCommand(_ cmd: Command, expect: LockState?) async throws {
-        let reply = try await sendSecure(.command, payload: [cmd.rawValue])
-        if let expect {
-            let status = try Self.parseStatusInfo(from: reply)
-            guard status.state == expect else { throw ProtocolError.unexpectedState(status.state) }
-        }
-    }
-
-    // MARK: Message primitives (plain / secure) ------------------------------
-
-    private func sendPlain(_ type: MsgID, payload: [UInt8] = []) async throws -> [UInt8] {
-        try await send(type, payload: payload, secure: false)
-    }
-
-    private func sendSecure(_ type: MsgID, payload: [UInt8]) async throws -> [UInt8] {
-        try await send(type, payload: payload, secure: true)
-    }
-
-    private func send(_ type: MsgID, payload: [UInt8], secure: Bool) async throws -> [UInt8] {
-        // Ensure *global* serial ordering – await only once per actor call.
-        while inflight { try await Task.sleep(nanoseconds: 1_000_000) } // 1 ms spin wait
-        inflight = true
-        defer { inflight = false }
-
-        let (frags, expectedReply) =  secure
-        ? try wrapSecure(type: type, payload: payload)
-        : (Fragment.build(type: type, payload: payload), MsgID.answerWithoutSecurity.rawValue)
-
-        for fragment in frags {
-            try await peripheral.writeValue(Data(fragment), forCharacteristicWithCBUUID: Self.sendUUID, ofServiceWithCBUUID: Self.serviceUUID)
-        }
-
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[UInt8], Error>) in
-            pendingContinuations[expectedReply] = cont
-        }
-    }
-
-    // MARK: Incoming processing ---------------------------------------------
-
-    private func handleIncoming(data: Data?) {
-        guard let data = data, let frag = Fragment(data) else { return }
-        assembler.append(frag)
-
-        if let msg = assembler.tryAssemble() {
-            process(message: msg)
-        }
-    }
-
-    private func process(message: Message) {
-        if let cont = pendingContinuations.removeValue(forKey: message.type) {
-            cont.resume(returning: message.payload)
-        }
-
-        if message.typeEnum == .statusInfo {
-            if let newStatus = try? Self.parseStatusInfo(from: message.payload) {
-                status = newStatus
-                for c in statusContinuations { c.yield(newStatus) }
-            }
-        }
-    }
-
-    // MARK: Status parsing helper
-
-    private static func parseStatusInfo(from payload: [UInt8]) throws -> Status {
-        guard payload.count >= 3 else { throw ProtocolError.badStatus }
-        let flags    = payload[1]
-        let stateRaw = payload[2] & 0x07
-        guard let state = LockState(rawValue: stateRaw) else { throw ProtocolError.badStatus }
-        return Status(state: state,
-                      batteryLow: (flags & 0x80) != 0,
-                      pairingAllowed: (flags & 0x01) != 0)
-    }
-
-    // MARK: Secure wrapping ---------------------------------------------------
-
-    private func wrapSecure(type: MsgID, payload: [UInt8]) throws -> ([[UInt8]], UInt8) {
-        let padded = payload.padded(to: Self.paddedLen(for: payload.count))
-
-        let cipher = Self.crypt(padded,
-                                type: type.rawValue,
-                                sessionNonce: remoteNonce,
-                                counter: localCtr,
-                                key: userKey)
-        let auth = Self.authentication(for: padded,
-                                       originalLen: payload.count,
-                                       type: type.rawValue,
-                                       sessionNonce: remoteNonce,
-                                       counter: localCtr,
-                                       key: userKey)
-        let full = cipher + UInt16(localCtr).leBytes + auth
-        localCtr &+= 1
-        return (Fragment.build(type: type, payload: full), MsgID.answerWithSecurity.rawValue)
-    }
-
-    // MARK: Disconnection helper --------------------------------------------
-
-    private func underlyingDisconnect() async {
-        await peripheral?.cancelAllOperations()
-        try? await central.cancelAllOperations()
-    }
-
-    // MARK: Support types / helpers -----------------------------------------
-
-    /// BLE command IDs the firmware understands.
-    private enum Command: UInt8 { case lock = 0, unlock = 1, open = 2, toggle = 3 }
-
-    /// Protocol message identifiers
-    private enum MsgID: UInt8 {
-        case connectionRequest = 0x02
-        case answerWithoutSecurity = 0x01
-        case answerWithSecurity    = 0x81
-        case statusRequest         = 0x82
-        case statusInfo            = 0x83
-        case command               = 0x87
-    }
-
-    private struct Message {
-        let type: UInt8           // raw
-        let payload: [UInt8]
-        var typeEnum: MsgID? { MsgID(rawValue: type) }
-    }
-
-    // ‑‑ Fragment assembler ---------------------------------------------------
-
-    private var assembler = Assembler()
-
-    private struct Fragment {
-        let header: UInt8
-        let body  : [UInt8]       // always 15B (padded)
-
-        var isFirst  : Bool { (header & 0x80) != 0 }
-        var remaining: Int  { Int(header & 0x7F) }
-
-        /// Parse from raw 16-byte Data received
-        init?(_ data: Data) {
-            guard data.count == 16 else { return nil }
-            header = data[0]
-            body   = Array(data[1..<16])
-        }
-
-        static func build(type: MsgID, payload: [UInt8]) -> [[UInt8]] {
-            let chunks = stride(from: 0, to: payload.count, by: 15)
-                .map { Array(payload[$0..<min($0+15, payload.count)]) }
-            return chunks.enumerated().map { (i, chunk) in
-                let h: UInt8 = (i == 0 ? 0x80 : 0) | UInt8(chunks.count - 1 - i)
-                var b = chunk
-                if i == 0 { b.insert(type.rawValue, at: 0) }
-                return [h] + b.padded(to: 15)
-            }
-        }
-    }
-
-    private struct Assembler {
-        private var incoming: [Fragment] = []
-
-        mutating func append(_ frag: Fragment) {
-            incoming.append(frag)
-        }
-
-        mutating func tryAssemble() -> Message? {
-            guard let first = incoming.first, first.isFirst else { return nil }
-            guard first.remaining == incoming.count - 1 else { return nil }
-
-            var bytes: [UInt8] = []
-            for (i, f) in incoming.enumerated() {
-                bytes += i == 0 ? Array(f.body.dropFirst()) : f.body
-            }
-
-            incoming.removeAll()
-            let type = first.body[0]
-            return Message(type: type, payload: bytes)
-        }
-    }
-
-    // ‑‑ Crypto helpers (ported 1:1 from legacy port) ------------------------
-
-    private static func aesEncrypt(key: [UInt8], block: [UInt8]) -> [UInt8] {
-        precondition(block.count == 16 && key.count == 16)
-        var out = [UInt8](repeating: 0, count: 16)
-        var outLen: size_t = 0
-        let stat = CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionECBMode),
-                           key, kCCKeySizeAES128, nil,
-                           block, 16, &out, 16, &outLen)
-        precondition(stat == kCCSuccess && outLen == 16)
-        return out
-    }
-
-    private static func crypt(_ input: [UInt8], type: UInt8, sessionNonce: [UInt8], counter: UInt16, key: [UInt8]) -> [UInt8] {
-        let nonce = [type] + sessionNonce + [0,0] + UInt16(counter).leBytes
-        var out = [UInt8](repeating: 0, count: input.count)
-        var blk: UInt16 = 1
-        var idx = 0
-        while idx < input.count {
-            let keystream = aesEncrypt(key: key, block: [1] + nonce + UInt16(blk).leBytes)
-            let n = min(16, input.count - idx)
-            let chunk = Array(input[idx..<idx+n])
-            out.replaceSubrange(idx..<idx+n, with: chunk ^ keystream[0..<n])
-            idx += n; blk += 1
-        }
-        return out
-    }
-
-    private static func authentication(for padded: [UInt8], originalLen: Int, type: UInt8, sessionNonce: [UInt8], counter: UInt16, key: [UInt8]) -> [UInt8] {
-        let nonce = [type] + sessionNonce + [0,0] + UInt16(counter).leBytes
-        var state = aesEncrypt(key: key, block: [9] + nonce + UInt16(originalLen).leBytes)
-        for off in stride(from: 0, to: padded.count, by: 16) {
-            let blk = Array(padded[off..<min(off+16,padded.count)]).padded(to: 16)
-            state = aesEncrypt(key: key, block: state ^ blk)
-        }
-        let s1 = aesEncrypt(key: key, block: [1] + nonce + [0,0])
-        return Array((state ^ s1)[0..<4])
-    }
-
-    private static func paddedLen(for len: Int) -> Int {
+    /// Eqiva wants ciphertext length ≡ 1 (mod 15)
+    static func paddedLength(for len: Int) -> Int {
         ((len - 1 + 14) / 15) * 15 + 1
     }
-
-    // MARK: Little helpers ----------------------------------------------------
-
-    private static func timestampBytes() -> [UInt8] {
-        let cal = Calendar(identifier: .gregorian)
-        let d = Date()
-        return [UInt8(cal.component(.year,  from: d) - 2000),
-                UInt8(cal.component(.month, from: d)),
-                UInt8(cal.component(.day,   from: d)),
-                UInt8(cal.component(.hour,  from: d)),
-                UInt8(cal.component(.minute,from: d)),
-                UInt8(cal.component(.second,from: d))]
+    func padded(to len: Int) -> [UInt8] {
+        self + Array(repeating: 0, count: Swift.max(0, len - count))
     }
-
-    private enum ProtocolError: Error {
-        case badHandshake, badStatus, unexpectedState(LockState)
-    }
-
-    // MARK: Combine bag (for BLE publisher)
-    private var cancellables: Set<AnyCancellable> = []
 }
 
-// MARK: ‑‑ Swift candy extensions -------------------------------------------
+private extension Data { var hex: String { [UInt8](self).hex } }
 
-import Combine
-
-private extension Array where Element == UInt8 {
-    mutating func xor(with other: [UInt8]) { self = zip(self, other).map(^) }
-}
-
-private func ^(lhs: [UInt8], rhs: ArraySlice<UInt8>) -> [UInt8] {
-    zip(lhs, rhs).map(^)
-}
-
-private func ^(lhs: [UInt8], rhs: [UInt8]) -> [UInt8] {
-    zip(lhs, rhs).map(^)
-}
-
-private extension UInt16 {
-    var leBytes: [UInt8] { [UInt8(self & 0xFF), UInt8(self >> 8)] }
-}
-
-private extension Array where Element == UInt8 {
-    init(hex str: String) {
-        let clean = str.replacingOccurrences(of: "[^0-9A-Fa-f]", with: "", options: .regularExpression)
-        self.init(); var idx = clean.startIndex
+private extension String {                     // Hex → [UInt8]
+    var bytesFromHex: [UInt8] {
+        let clean = replacingOccurrences(of: "[^0-9A-Fa-f]", with: "", options: .regularExpression)
+        var out: [UInt8] = []
+        var idx = clean.startIndex
         while idx < clean.endIndex {
             let nxt = clean.index(idx, offsetBy: 2)
-            self.append(UInt8(clean[idx..<nxt], radix: 16)!)
+            out.append(UInt8(clean[idx ..< nxt], radix: 16)!)
             idx = nxt
+        }
+        return out
+    }
+}
+
+// MARK: – Protocol definitions ---------------------------------------------
+
+fileprivate enum MessageID: UInt8 {
+    case fragmentAck               = 0x00
+    case answerPlain               = 0x01
+    case connectionRequest         = 0x02
+    case connectionInfo            = 0x03
+    case pairingRequest            = 0x04
+    case statusChangedNotification = 0x05
+    case closeConnection           = 0x06
+
+    // Bootloader 0x1* omitted
+
+    case answerSecure       = 0x81
+    case statusRequest      = 0x82
+    case statusInfo         = 0x83
+    case command            = 0x87
+
+    var secure: Bool { rawValue & 0x80 != 0 }
+}
+
+public enum EqivaCommand: UInt8 { case lock = 0, unlock = 1, open = 2 }
+
+public enum LockState: UInt8 { case unknown = 0, moving = 1, unlocked = 2, locked = 3, opened = 4 }
+
+public struct LockStatus { public let state: LockState; public let batteryLow: Bool }
+
+public protocol EqivaLockDelegate: AnyObject {
+    func eqivaLockDidConnect(_ lock: EqivaLock)
+    func eqivaLockDidDisconnect(_ lock: EqivaLock)
+    func eqivaLock(_ lock: EqivaLock, didUpdateStatus status: LockStatus)
+}
+
+public enum EqivaLockError: Error { case bluetoothOff, handshakeFailed, timeout, protocolError(String) }
+
+// MARK: – Cryptography ------------------------------------------------------
+
+fileprivate struct Crypto {
+    static func aesECBEncrypt(key: [UInt8], block: [UInt8]) -> [UInt8] {
+        precondition(key.count == 16 && block.count == 16)
+        var out = [UInt8](repeating: 0, count: 16)
+        var outLen: size_t = 0
+        let status = CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionECBMode),
+                             key, kCCKeySizeAES128, nil, block, 16, &out, 16, &outLen)
+        precondition(status == kCCSuccess && outLen == 16)
+        return out
+    }
+
+    static func makeNonce(type: UInt8, session: [UInt8], counter: UInt16) -> [UInt8] {
+        [type] + session + [0, 0] + .le(counter)
+    }
+
+    /// AES‑CTR (Eqiva: AES‑ECB‑keystream) encrypt/decrypt
+    static func crypt(_ plain: [UInt8], key: [UInt8], type: UInt8, session: [UInt8], counter: UInt16) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: plain.count)
+        let nonce = makeNonce(type: type, session: session, counter: counter)
+        var blk: UInt16 = 1
+        var offset = 0
+        while offset < plain.count {
+            let ks = aesECBEncrypt(key: key, block: [1] + nonce + .le(blk))
+            let n   = min(16, plain.count - offset)
+            let xorResult = Array(plain[offset ..< offset+n]).xor(Array(ks.prefix(n)))
+            for i in 0..<n {
+                out[offset + i] = xorResult[i]
+            }
+            offset += n; blk += 1
+        }
+        return out
+    }
+
+    /// 4‑byte auth value – spec reverse‑engineered from keyble.js
+    static func auth(for padded: [UInt8], originalLen: Int, key: [UInt8], type: UInt8, session: [UInt8], counter: UInt16) -> [UInt8] {
+        let nonce = makeNonce(type: type, session: session, counter: counter)
+        var state = aesECBEncrypt(key: key, block: [9] + nonce + .le(UInt16(originalLen)))
+        for off in stride(from: 0, to: padded.count, by: 16) {
+            let chunk = Array(padded[off ..< min(off+16, padded.count)]).padded(to: 16)
+            state = aesECBEncrypt(key: key, block: state.xor(chunk))
+        }
+        let s1 = aesECBEncrypt(key: key, block: [1] + nonce + [0,0])
+        return Array(state.prefix(4)).xor(Array(s1.prefix(4)))
+    }
+}
+
+// MARK: – Fragment structure ----------------------------------------------
+
+fileprivate struct Fragment {
+    let status: UInt8       // MSB == 1 on FIRST fragment
+    let body:   [UInt8]     // up to 15 bytes
+
+    var isFirst: Bool { status & 0x80 != 0 }
+    var remaining: Int { Int(status & 0x7F) }
+    var isLast: Bool { remaining == 0 }
+
+    var data: Data { Data([status] + body.padded(to: 15)) }
+
+    static func make(messageType: MessageID, payload: [UInt8]) -> [Fragment] {
+        let parts = stride(from: 0, to: payload.count, by: 15).map {
+            Array(payload[$0 ..< min($0+15, payload.count)])
+        }
+        return parts.enumerated().map { idx, part in
+            let remaining = parts.count - idx - 1
+            let st: UInt8 = (idx == 0 ? 0x80 : 0) | UInt8(remaining)
+            let b = idx == 0 ? [messageType.rawValue] + part : part
+            return Fragment(status: st, body: b)
+        }
+    }
+    
+    init?(raw: Data) {
+        guard raw.count == 16 else { return nil }
+        status = raw[0]
+        body   = Array(raw[1..<16])
+    }
+    
+    init(status: UInt8, body: [UInt8]) {
+        self.status = status
+        self.body = body
+    }
+}
+
+// MARK: – Operation abstraction -------------------------------------------
+
+fileprivate final class Operation {
+    let messageType: MessageID
+    let payload: [UInt8]
+    let expectedResponse: MessageID?
+    let onComplete: (Result<[UInt8], Error>) -> Void
+    private var timeoutTimer: DispatchSourceTimer?
+
+    init(type: MessageID, payload: [UInt8], expected: MessageID?, queue: DispatchQueue,
+         timeout: TimeInterval = 10, completion: @escaping (Result<[UInt8], Error>) -> Void) {
+        self.messageType = type; self.payload = payload; self.expectedResponse = expected; self.onComplete = completion
+        if timeout > 0 {
+            timeoutTimer = DispatchSource.makeTimerSource(queue: queue)
+            timeoutTimer?.schedule(deadline: .now() + timeout)
+            timeoutTimer?.setEventHandler { [weak self] in
+                self?.finish(.failure(EqivaLockError.timeout))
+            }
+            timeoutTimer?.resume()
         }
     }
 
-    func padded(to len: Int) -> [UInt8] { self + Array(repeating: 0, count: Swift.max(0, len - count)) }
+    func finish(_ result: Result<[UInt8], Error>) {
+        timeoutTimer?.cancel(); onComplete(result)
+    }
+}
+
+// MARK: – Main class -------------------------------------------------------
+
+public final class EqivaLock: NSObject {
+
+    // === Public API ===
+    public weak var delegate: EqivaLockDelegate?
+
+    public init(userKeyHex: String, userID: UInt8 = 255) {
+        self.userKey = userKeyHex.bytesFromHex
+        self.userID  = userID
+        self.queue   = DispatchQueue(label: "EqivaLock.Serial")
+        super.init()
+    }
+
+    public func connect(completion: @escaping (Result<Void, Error>) -> Void) {
+        queue.async {
+            self.connectCompletion = completion
+            self.central = CBCentralManager(delegate: self, queue: self.queue)
+        }
+    }
+
+    public func disconnect() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            if let p = self.peripheral { self.central?.cancelPeripheralConnection(p) }
+            self.reset()
+        }
+    }
+
+    /// Lock / unlock / open -------------------------------------------------
+    public func send(_ cmd: EqivaCommand, completion: @escaping (Result<LockStatus, Error>) -> Void) {
+        let payload = [cmd.rawValue]
+        enqueueSecure(message: .command, payload: payload, expected: .statusInfo) { [weak self] res in
+            switch res {
+            case .failure(let e): completion(.failure(e))
+            case .success(let data):
+                guard let st = self?.parseStatusInfo(data) else {
+                    completion(.failure(EqivaLockError.protocolError("Malformed status")))
+                    return
+                }
+                completion(.success(st))
+            }
+        }
+    }
+
+    /// Query current status (does NOT alter lock state)
+    public func getStatus(completion: @escaping (Result<LockStatus, Error>) -> Void) {
+        let ts = EqivaLock.timestamp()
+        enqueueSecure(message: .statusRequest, payload: ts, expected: .statusInfo) { [weak self] res in
+            switch res {
+            case .failure(let e): completion(.failure(e))
+            case .success(let data):
+                guard let st = self?.parseStatusInfo(data) else {
+                    completion(.failure(EqivaLockError.protocolError("Malformed status")))
+                    return
+                }
+                completion(.success(st))
+            }
+        }
+    }
+
+    // =========================================================================
+    // MARK: – Internal state
+
+    private let queue: DispatchQueue
+    private var central: CBCentralManager?
+    private var peripheral: CBPeripheral?
+    private var txChar: CBCharacteristic?
+    private var rxChar: CBCharacteristic?
+
+    private var connectCompletion: ((Result<Void, Error>) -> Void)?
+
+    private enum ConnState { case idle, scanning, connecting, ready, secured }
+    private var state: ConnState = .idle
+
+    // ––– Crypto/session
+    private var userKey: [UInt8]
+    private var userID: UInt8
+    private var localNonce:  [UInt8] = Array(repeating: 0, count: 8)
+    private var remoteNonce: [UInt8] = Array(repeating: 0, count: 8)
+    private var localCounter:  UInt16 = 1
+    private var remoteCounter: UInt16 = 0
+
+    // ––– Operation queue (message‑level)
+    private var opQueue: [Operation] = []
+    private var inFlight: Operation?
+
+    // ––– Fragment assembly
+    private var inFragments: [Fragment] = []
+    private var awaitingAckStatus: UInt8?
+
+    // =========================================================================
+    // MARK: – Constants
+
+    private static let serviceUUID = CBUUID(string: "58E06900-15D8-11E6-B737-0002A5D5C51B")
+    private static let txUUID      = CBUUID(string: "3141DD40-15DB-11E6-A24B-0002A5D5C51B") // write
+    private static let rxUUID      = CBUUID(string: "359D4820-15DB-11E6-82BD-0002A5D5C51B") // notify
+
+    // =========================================================================
+    // MARK: – Message queue helpers
+
+    private func enqueuePlain(message type: MessageID, payload: [UInt8], expected: MessageID?,
+                              completion: @escaping (Result<[UInt8], Error>) -> Void) {
+        queue.async {
+            let op = Operation(type: type, payload: payload, expected: expected, queue: self.queue, completion: completion)
+            self.opQueue.append(op); self.pump()
+        }
+    }
+
+    private func enqueueSecure(message type: MessageID, payload: [UInt8], expected: MessageID?,
+                               completion: @escaping (Result<[UInt8], Error>) -> Void) {
+        queue.async {
+            guard self.state == .secured else {
+                // handshake needed first – prepend operation to queue after CR
+                self.ensureSecureChannel()
+                let op = Operation(type: type, payload: payload, expected: expected, queue: self.queue, completion: completion)
+                self.opQueue.append(op); return
+            }
+
+            // pad, encrypt, auth
+            let padLen = [UInt8].paddedLength(for: payload.count)
+            let padded = payload.padded(to: padLen)
+            let cipher = Crypto.crypt(padded, key: self.userKey, type: type.rawValue, session: self.remoteNonce, counter: self.localCounter)
+            let auth   = Crypto.auth(for: padded, originalLen: payload.count, key: self.userKey, type: type.rawValue, session: self.remoteNonce, counter: self.localCounter)
+            let full   = cipher + .le(self.localCounter) + auth
+            self.localCounter &+= 1
+            let op = Operation(type: type, payload: full, expected: expected, queue: self.queue, completion: completion)
+            self.opQueue.append(op); self.pump()
+        }
+    }
+
+    private func ensureSecureChannel() {
+        guard state == .ready else { return }
+        localNonce = (0..<8).map { _ in UInt8.random(in: 0...255) }
+        let cr = Operation(type: .connectionRequest, payload: [userID] + localNonce, expected: .connectionInfo, queue: queue) { [weak self] res in
+            switch res {
+            case .failure(let e): self?.connectCompletion?(.failure(e))
+            case .success:
+                self?.state = .secured
+                self?.connectCompletion?(.success(()))
+            }
+        }
+        opQueue.insert(cr, at: 0)
+    }
+
+    private func pump() {
+        guard inFlight == nil, let op = opQueue.first, let p = peripheral, let tx = txChar else { return }
+        inFlight = op
+        let frags = Fragment.make(messageType: op.messageType, payload: op.payload)
+        sendFragments(frags, via: p, char: tx, index: 0)
+    }
+
+    private func sendFragments(_ frags: [Fragment], via p: CBPeripheral, char: CBCharacteristic, index: Int) {
+        guard index < frags.count else {
+            awaitingAckStatus = nil
+            return   // all sent; waiting for response
+        }
+        let frag = frags[index]
+        awaitingAckStatus = frag.isLast ? nil : frag.status      // need ACK for non‑last fragments
+        p.writeValue(frag.data, for: char, type: .withResponse)
+        if frag.isLast { return } // next fragment will be triggered by ACK
+    }
+
+    // =========================================================================
+    // MARK: – Helper: parse status
+
+    private func parseStatusInfo(_ data: [UInt8]) -> LockStatus? {
+        guard data.count >= 3 else { return nil }
+        let id  = LockState(rawValue: data[2] & 0x07) ?? .unknown
+        let low = data[1] & 0x80 != 0
+        return LockStatus(state: id, batteryLow: low)
+    }
+
+    private static func timestamp() -> [UInt8] {
+        let c = Calendar(identifier: .gregorian); let d = Date()
+        return [UInt8(c.component(.year,  from: d) - 2000),
+                UInt8(c.component(.month, from: d)),
+                UInt8(c.component(.day,   from: d)),
+                UInt8(c.component(.hour,  from: d)),
+                UInt8(c.component(.minute,from: d)),
+                UInt8(c.component(.second,from: d))]
+    }
+
+    private func reset() {
+        opQueue.removeAll(); inFlight = nil; inFragments.removeAll(); awaitingAckStatus = nil
+        state = .idle; central = nil; peripheral = nil; txChar = nil; rxChar = nil
+    }
+}
+
+// MARK: – CBCentralManagerDelegate ----------------------------------------
+
+extension EqivaLock: CBCentralManagerDelegate {
+    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard central.state == .poweredOn else {
+            connectCompletion?(.failure(EqivaLockError.bluetoothOff)); return
+        }
+        guard state == .idle else { return }
+        state = .scanning; central.scanForPeripherals(withServices: [Self.serviceUUID])
+    }
+
+    public func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String : Any], rssi: NSNumber) {
+        c.stopScan(); state = .connecting; peripheral = p; p.delegate = self; c.connect(p)
+    }
+
+    public func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        state = .ready; delegate?.eqivaLockDidConnect(self); p.discoverServices([Self.serviceUUID])
+    }
+
+    public func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        reset(); delegate?.eqivaLockDidDisconnect(self)
+    }
+}
+
+// MARK: – CBPeripheralDelegate --------------------------------------------
+
+extension EqivaLock: CBPeripheralDelegate {
+    public func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let svc = p.services?.first(where: { $0.uuid == Self.serviceUUID }) else { return }
+        p.discoverCharacteristics([Self.txUUID, Self.rxUUID], for: svc)
+    }
+
+    public func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor svc: CBService, error: Error?) {
+        for ch in svc.characteristics ?? [] {
+            if ch.uuid == Self.txUUID { txChar = ch }
+            if ch.uuid == Self.rxUUID { rxChar = ch; p.setNotifyValue(true, for: ch) }
+        }
+        pump()
+    }
+
+    public func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
+        guard let raw = ch.value, let frag = Fragment(raw: raw) else { return }
+        if frag.isFirst { inFragments.removeAll() }
+        inFragments.append(frag)
+
+        // If ACK expected
+        if frag.isFirst == false && frag.isLast == false && frag.body.count == 0 { /* skip */ }
+        if frag.status == awaitingAckStatus {      // Received ACK → send next fragment
+            awaitingAckStatus = nil
+            if let op = inFlight, let p = peripheral, let tx = txChar {
+                let frags = Fragment.make(messageType: op.messageType, payload: op.payload)
+                sendFragments(frags, via: p, char: tx, index: frags.firstIndex(where: { $0.status == frag.status })! + 1)
+            }
+            return
+        }
+
+        guard frag.isLast else { return }
+        let completePayload = inFragments.enumerated().flatMap { idx, f -> [UInt8] in
+            idx == 0 ? Array(f.body.dropFirst()) : f.body
+        }
+        let type = MessageID(rawValue: inFragments[0].body[0]) ?? .fragmentAck
+        handleIncoming(type: type, payload: completePayload)
+    }
+
+    private func handleIncoming(type: MessageID, payload: [UInt8]) {
+        switch type {
+        case .fragmentAck:
+            // handled earlier when we compared status – nothing extra
+            break
+        case .connectionInfo:
+            guard payload.count >= 9 else {
+                inFlight?.finish(.failure(EqivaLockError.protocolError("Malformed CI"))); inFlight = nil; pump(); return
+            }
+            remoteNonce = Array(payload[1...8]); remoteCounter = 0; localCounter = 1
+            inFlight?.finish(.success(payload)); inFlight = nil; pump()
+        case .statusInfo:
+            let st = parseStatusInfo(payload)
+            if let op = inFlight, op.expectedResponse == .statusInfo {
+                op.finish(.success(payload)); inFlight = nil; pump()
+            }
+            if let st = st { delegate?.eqivaLock(self, didUpdateStatus: st) }
+        case .answerSecure:
+            inFlight?.finish(.failure(EqivaLockError.protocolError("Auth failed"))); inFlight = nil; pump()
+        default:
+            // Some other response we don't expect – ignore
+            break
+        }
+    }
 }
