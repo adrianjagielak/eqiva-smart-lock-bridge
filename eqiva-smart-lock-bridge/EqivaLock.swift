@@ -437,6 +437,7 @@ public final class EqivaLock: NSObject {
 
 extension EqivaLock: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        print("Starting Bluetooth scan")
         guard central.state == .poweredOn else {
             connectCompletion?(.failure(EqivaLockError.bluetoothOff)); return
         }
@@ -445,14 +446,17 @@ extension EqivaLock: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String : Any], rssi: NSNumber) {
+        print("Discovered eQ-3 smart lock")
         c.stopScan(); state = .connecting; peripheral = p; p.delegate = self; c.connect(p)
     }
 
     public func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
+        print("Connected")
         state = .ready; delegate?.eqivaLockDidConnect(self); p.discoverServices([Self.serviceUUID])
     }
 
     public func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        print("Disconnected")
         reset(); delegate?.eqivaLockDidDisconnect(self)
     }
 }
@@ -461,11 +465,13 @@ extension EqivaLock: CBCentralManagerDelegate {
 
 extension EqivaLock: CBPeripheralDelegate {
     public func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
+        print("Discovered BLE services")
         guard let svc = p.services?.first(where: { $0.uuid == Self.serviceUUID }) else { return }
         p.discoverCharacteristics([Self.txUUID, Self.rxUUID], for: svc)
     }
 
     public func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor svc: CBService, error: Error?) {
+        print("Discovered BLE characteristics")
         for ch in svc.characteristics ?? [] {
             if ch.uuid == Self.txUUID { txChar = ch }
             if ch.uuid == Self.rxUUID { rxChar = ch; p.setNotifyValue(true, for: ch) }
