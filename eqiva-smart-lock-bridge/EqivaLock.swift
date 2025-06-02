@@ -245,7 +245,7 @@ public final class EqivaLock: NSObject {
     // === Public API ===
     public weak var delegate: EqivaLockDelegate?
 
-    public init(userKeyHex: String, userID: UInt8 = 255) {
+    public init(userKeyHex: String, userID: UInt8) {
         self.userKey = userKeyHex.bytesFromHex
         self.userID  = userID
         self.queue   = DispatchQueue(label: "EqivaLock.Serial")
@@ -516,6 +516,8 @@ extension EqivaLock: CBPeripheralDelegate {
             if let st = st { delegate?.eqivaLock(self, didUpdateStatus: st) }
         case .answerWithoutSecurity:
             inFlight?.finish(.failure(EqivaLockError.protocolError("Auth failed"))); inFlight = nil; pump()
+        case .statusChangedNotification:
+            getStatus(){_ in}
         default:
             // Some other response we don't expect – ignore
             break
