@@ -1,7 +1,6 @@
 // EqivaLock.swift
-// Modern, message‑based Swift library for eQ‑3 Eqiva Bluetooth Smart Lock
-// Created 2 Jun 2025 – rewritten from the legacy keyble.js logic
-// No async/await – public API uses completion handlers.
+// Modern, message‑based Swift library for eQ‑3 Eqiva Bluetooth Smart Lock.
+// Created 2 Jun 2025 – rewritten from the legacy keyble.js logic.
 // -----------------------------------------------------------------------------
 
 import Foundation
@@ -20,16 +19,24 @@ private extension Array where Element == UInt8 {
         return zip(self, other).map(^)
     }
 
-    /// Little‑endian UInt16 helpers (protocol specifies LE)
-    static func le(_ value: UInt16) -> [UInt8] { [UInt8(value & 0xFF), UInt8(value >> 8)] }
+    // MARK: – Endianness helpers
+    static func be(_ value: UInt16) -> [UInt8] {
+        [UInt8(value >> 8), UInt8(value & 0xFF)]
+    }
+    static func le(_ value: UInt16) -> [UInt8] {
+        [UInt8(value & 0xFF), UInt8(value >> 8)]
+    }
+    
     func toUInt16LE(at offset: Int) -> UInt16 {
         UInt16(self[offset]) | (UInt16(self[offset + 1]) << 8)
     }
 
-    /// Eqiva wants ciphertext length ≡ 1 (mod 15)
+    /// Eqiva wants ciphertext length ≡ 8 (mod 15)
     static func paddedLength(for len: Int) -> Int {
-        ((len - 1 + 14) / 15) * 15 + 1
+        let r = len % 15
+        return r <= 8 ? len + (8 - r) : len + (15 - (r - 8))
     }
+
     func padded(to len: Int) -> [UInt8] {
         self + Array(repeating: 0, count: Swift.max(0, len - count))
     }
@@ -53,21 +60,50 @@ private extension String {                     // Hex → [UInt8]
 
 // MARK: – Protocol definitions ---------------------------------------------
 
+// de.eq3.ble.key.android.a.a.w.java
 fileprivate enum MessageID: UInt8 {
     case fragmentAck               = 0x00
-    case answerPlain               = 0x01
+    case answerWithoutSecurity     = 0x01
     case connectionRequest         = 0x02
     case connectionInfo            = 0x03
     case pairingRequest            = 0x04
     case statusChangedNotification = 0x05
     case closeConnection           = 0x06
 
-    // Bootloader 0x1* omitted
+    case bootloaderStartApp = 0x10
+    case bootloaderData     = 0x11
+    case bootloaderStatus   = 0x12
 
-    case answerSecure       = 0x81
-    case statusRequest      = 0x82
-    case statusInfo         = 0x83
-    case command            = 0x87
+    case answerWithSecurity  = 0x81
+    case statusRequest       = 0x82
+    case statusInfo          = 0x83
+    case mountOptionsRequest = 0x84
+    case mountOptionsInfo    = 0x85
+    case mountOptionsSet     = 0x86
+    case command             = 0x87
+    case autoRelockSet       = 0x88
+
+    case pairingSet                       = 0x8A
+    case userListRequest                  = 0x8B
+    case userListInfo                     = 0x8C
+    case userRemove                       = 0x8D
+    case userInfoRequest                  = 0x8E
+    case userInfo                         = 0x8F
+    case userNameSet                      = 0x90
+    case userOptionsSet                   = 0x91
+    case userProgRequest                  = 0x92
+    case userProgInfo                     = 0x93
+    case userProgSet                      = 0x94
+    case autoRelockProgRequest            = 0x95
+    case autoRelockProgInfo               = 0x96
+    case autoRelockProgSet                = 0x97
+    case logRequest                       = 0x98
+    case logInfo                          = 0x99
+    case keyBleApplicationBootloaderCall  = 0x9A
+    case daylightSavingTimeOptionsRequest = 0x9B
+    case daylightSavingTimeOptionsInfo    = 0x9C
+    case daylightSavingTimeOptionsSet     = 0x9D
+    case factoryReset                     = 0x9E
 
     var secure: Bool { rawValue & 0x80 != 0 }
 }
@@ -100,7 +136,7 @@ fileprivate struct Crypto {
     }
 
     static func makeNonce(type: UInt8, session: [UInt8], counter: UInt16) -> [UInt8] {
-        [type] + session + [0, 0] + .le(counter)
+        [type] + session + [0, 0] + .be(counter)
     }
 
     /// AES‑CTR (Eqiva: AES‑ECB‑keystream) encrypt/decrypt
@@ -110,7 +146,7 @@ fileprivate struct Crypto {
         var blk: UInt16 = 1
         var offset = 0
         while offset < plain.count {
-            let ks = aesECBEncrypt(key: key, block: [1] + nonce + .le(blk))
+            let ks = aesECBEncrypt(key: key, block: [1] + nonce + .be(blk))
             let n   = min(16, plain.count - offset)
             let xorResult = Array(plain[offset ..< offset+n]).xor(Array(ks.prefix(n)))
             for i in 0..<n {
@@ -124,7 +160,7 @@ fileprivate struct Crypto {
     /// 4‑byte auth value – spec reverse‑engineered from keyble.js
     static func auth(for padded: [UInt8], originalLen: Int, key: [UInt8], type: UInt8, session: [UInt8], counter: UInt16) -> [UInt8] {
         let nonce = makeNonce(type: type, session: session, counter: counter)
-        var state = aesECBEncrypt(key: key, block: [9] + nonce + .le(UInt16(originalLen)))
+        var state = aesECBEncrypt(key: key, block: [9] + nonce + .be(UInt16(originalLen)))
         for off in stride(from: 0, to: padded.count, by: 16) {
             let chunk = Array(padded[off ..< min(off+16, padded.count)]).padded(to: 16)
             state = aesECBEncrypt(key: key, block: state.xor(chunk))
@@ -175,13 +211,18 @@ fileprivate struct Fragment {
 fileprivate final class Operation {
     let messageType: MessageID
     let payload: [UInt8]
+    let isSecured: Bool
     let expectedResponse: MessageID?
     let onComplete: (Result<[UInt8], Error>) -> Void
     private var timeoutTimer: DispatchSourceTimer?
 
-    init(type: MessageID, payload: [UInt8], expected: MessageID?, queue: DispatchQueue,
+    init(type: MessageID, payload: [UInt8], isSecured: Bool, expected: MessageID?, queue: DispatchQueue,
          timeout: TimeInterval = 10, completion: @escaping (Result<[UInt8], Error>) -> Void) {
-        self.messageType = type; self.payload = payload; self.expectedResponse = expected; self.onComplete = completion
+        self.messageType = type;
+        self.payload = payload;
+        self.isSecured = isSecured;
+        self.expectedResponse = expected;
+        self.onComplete = completion
         if timeout > 0 {
             timeoutTimer = DispatchSource.makeTimerSource(queue: queue)
             timeoutTimer?.schedule(deadline: .now() + timeout)
@@ -301,7 +342,7 @@ public final class EqivaLock: NSObject {
     private func enqueuePlain(message type: MessageID, payload: [UInt8], expected: MessageID?,
                               completion: @escaping (Result<[UInt8], Error>) -> Void) {
         queue.async {
-            let op = Operation(type: type, payload: payload, expected: expected, queue: self.queue, completion: completion)
+            let op = Operation(type: type, payload: payload, isSecured: false, expected: expected, queue: self.queue, completion: completion)
             self.opQueue.append(op); self.pump()
         }
     }
@@ -309,29 +350,19 @@ public final class EqivaLock: NSObject {
     private func enqueueSecure(message type: MessageID, payload: [UInt8], expected: MessageID?,
                                completion: @escaping (Result<[UInt8], Error>) -> Void) {
         queue.async {
-            guard self.state == .secured else {
-                // handshake needed first – prepend operation to queue after CR
+            if self.state != .secured {
                 self.ensureSecureChannel()
-                let op = Operation(type: type, payload: payload, expected: expected, queue: self.queue, completion: completion)
-                self.opQueue.append(op); return
             }
-
-            // pad, encrypt, auth
-            let padLen = [UInt8].paddedLength(for: payload.count)
-            let padded = payload.padded(to: padLen)
-            let cipher = Crypto.crypt(padded, key: self.userKey, type: type.rawValue, session: self.remoteNonce, counter: self.localCounter)
-            let auth   = Crypto.auth(for: padded, originalLen: payload.count, key: self.userKey, type: type.rawValue, session: self.remoteNonce, counter: self.localCounter)
-            let full   = cipher + .le(self.localCounter) + auth
-            self.localCounter &+= 1
-            let op = Operation(type: type, payload: full, expected: expected, queue: self.queue, completion: completion)
-            self.opQueue.append(op); self.pump()
+            
+            let op = Operation(type: type, payload: payload, isSecured: true, expected: expected, queue: self.queue, completion: completion)
+            self.opQueue.append(op); self.pump();
         }
     }
 
     private func ensureSecureChannel() {
         guard state == .ready else { return }
         localNonce = (0..<8).map { _ in UInt8.random(in: 0...255) }
-        let cr = Operation(type: .connectionRequest, payload: [userID] + localNonce, expected: .connectionInfo, queue: queue) { [weak self] res in
+        let cr = Operation(type: .connectionRequest, payload: [userID] + localNonce, isSecured: false, expected: .connectionInfo, queue: queue) { [weak self] res in
             switch res {
             case .failure(let e): self?.connectCompletion?(.failure(e))
             case .success:
@@ -343,9 +374,25 @@ public final class EqivaLock: NSObject {
     }
 
     private func pump() {
-        guard inFlight == nil, let op = opQueue.first, let p = peripheral, let tx = txChar else { return }
+        guard inFlight == nil, let p = peripheral, let tx = txChar, let op = opQueue.first else { return }
+        opQueue.removeFirst()
         inFlight = op
-        let frags = Fragment.make(messageType: op.messageType, payload: op.payload)
+        
+        let effectivePayload: [UInt8]
+        
+        if (op.isSecured){
+            // pad, encrypt, auth
+            let padLen = [UInt8].paddedLength(for: op.payload.count)
+            let padded = op.payload.padded(to: padLen)
+            let cipher = Crypto.crypt(padded, key: self.userKey, type: op.messageType.rawValue, session: self.remoteNonce, counter: self.localCounter)
+            let auth   = Crypto.auth(for: padded, originalLen: padded.count, key: self.userKey, type: op.messageType.rawValue, session: self.remoteNonce, counter: self.localCounter)
+            effectivePayload   = cipher + .be(self.localCounter) + auth
+            self.localCounter &+= 1
+        } else {
+            effectivePayload = op.payload
+        }
+          
+        let frags = Fragment.make(messageType: op.messageType, payload: effectivePayload)
         sendFragments(frags, via: p, char: tx, index: 0)
     }
 
@@ -467,7 +514,7 @@ extension EqivaLock: CBPeripheralDelegate {
                 op.finish(.success(payload)); inFlight = nil; pump()
             }
             if let st = st { delegate?.eqivaLock(self, didUpdateStatus: st) }
-        case .answerSecure:
+        case .answerWithoutSecurity:
             inFlight?.finish(.failure(EqivaLockError.protocolError("Auth failed"))); inFlight = nil; pump()
         default:
             // Some other response we don't expect – ignore

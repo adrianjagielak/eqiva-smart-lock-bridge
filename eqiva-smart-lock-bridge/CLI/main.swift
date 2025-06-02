@@ -20,9 +20,11 @@ import CoreBluetooth
 
 var shouldKeepRunning = true
 
-var eqivaLock: EqivaLock? = nil
 
-Task {
+//#if DEBUG
+//EqivaLock.selfTest()
+//#endif
+
     // MARK: ───────────────────────────────────────────────────────────────────────
     // CONFIGURATION (fill in your own values here)
     // ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +42,8 @@ Task {
     // MAIN CLI LOGIC
     // ───────────────────────────────────────────────────────────────────────────────
     
-     eqivaLock = try! await EqivaLock.connect(userID: USER_ID, userKeyHex: USER_KEY_HEX)
+     let eqivaLock = EqivaLock(userKeyHex: USER_KEY_HEX, userID: USER_ID)
+eqivaLock.connect(){ _ in}
     
     
     //// Handle status updates
@@ -80,10 +83,10 @@ Task {
     //}
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
         print("👨‍💻  Calling keyBle.lock()")
-        Task {
-            try? await  eqivaLock?.lock()
-        }
-    }
+        
+        eqivaLock.send(.lock){_ in}
+        
+    
 }
 
 // Read stdin in background (external commands)
@@ -91,26 +94,22 @@ DispatchQueue.global(qos: .background).async {
  let input = FileHandle.standardInput
         while shouldKeepRunning {
         if let lineData = try? input.read(upToCount: 1024), !lineData.isEmpty {
-            Task {
                 if let cmd = String(data: lineData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                     .lowercased() {
                     switch cmd {
                     case "lock":
-                      try? await eqivaLock?.lock()
+                        eqivaLock.send(.lock){_ in}
                     case "unlock":
-                        try? await eqivaLock?.unlock()
+                        eqivaLock.send(.unlock){_ in}
                     case "open":
-                        try? await eqivaLock?.open()
+                        eqivaLock.send(.open){_ in}
                     case "status":
-                        try? await eqivaLock?.requestStatus()
-                    case "toggle":
-                        try? await eqivaLock?.toggle()
+                        eqivaLock.getStatus(){_ in}
                     default:
                         print("[CLI] Unknown command: \(cmd)")
                     }
                 }
-            }
         } else {
             // stdin closed or EOF
             shouldKeepRunning = false
