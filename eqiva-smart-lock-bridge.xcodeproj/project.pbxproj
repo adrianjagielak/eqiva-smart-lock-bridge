@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		FE0F15442DEE1D7800BC9523 /* AsyncBluetooth in Frameworks */ = {isa = PBXBuildFile; productRef = FE0F15432DEE1D7800BC9523 /* AsyncBluetooth */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXCopyFilesBuildPhase section */
 		FE0F14FA2DEBC97500BC9523 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -39,7 +35,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				FE0F15442DEE1D7800BC9523 /* AsyncBluetooth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -82,7 +77,6 @@
 			);
 			name = "eqiva-smart-lock-bridge";
 			packageProductDependencies = (
-				FE0F15432DEE1D7800BC9523 /* AsyncBluetooth */,
 			);
 			productName = "eqiva-smart-lock-bridge";
 			productReference = FE0F14FC2DEBC97500BC9523 /* eqiva-smart-lock-bridge */;
@@ -113,7 +107,6 @@
 			mainGroup = FE0F14F32DEBC97500BC9523;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				FE0F15422DEE1D7800BC9523 /* XCRemoteSwiftPackageReference "AsyncBluetooth" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FE0F14FD2DEBC97500BC9523 /* Products */;
@@ -298,25 +291,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		FE0F15422DEE1D7800BC9523 /* XCRemoteSwiftPackageReference "AsyncBluetooth" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/manolofdez/AsyncBluetooth";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		FE0F15432DEE1D7800BC9523 /* AsyncBluetooth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FE0F15422DEE1D7800BC9523 /* XCRemoteSwiftPackageReference "AsyncBluetooth" */;
-			productName = AsyncBluetooth;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FE0F14F42DEBC97500BC9523 /* Project object */;
 }
