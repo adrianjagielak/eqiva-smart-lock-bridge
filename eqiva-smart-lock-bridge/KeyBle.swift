@@ -15,30 +15,32 @@ import CommonCrypto
 // MARK: -- Helpers -----------------------------------------------------------
 
 private extension Array where Element == UInt8 {
-
     /// Hex dump – nice for logs
     var hex: String { map { String(format: "%02X", $0) }.joined(separator: " ") }
 
-    /// XOR two equal-length buffers
+    /// XOR two equal‑length buffers
     func xor(with other: [UInt8]) -> [UInt8] {
         precondition(count == other.count)
         return zip(self, other).map(^)
     }
 
-    /// Big-endian integer ⇄ byte helpers
+    // Little‑endian UInt16 helpers (protocol specifies LE)
     static func fromUInt16(_ value: UInt16) -> [UInt8] {
-        [UInt8(value >> 8), UInt8(value & 0xFF)]
+        [UInt8(value & 0xFF), UInt8(value >> 8)]
     }
+    
     func toUInt16(offset: Int) -> UInt16 {
-        let hi = UInt16(self[offset])
-        let lo = UInt16(self[offset + 1])
+        let lo = UInt16(self[offset])
+        let hi = UInt16(self[offset + 1])
         return (hi << 8) | lo
     }
 
-    /// Ceiling function used by keyble.js → 8,23,38,…
+    /// Ceiling function used by keyble.js → 1,16,31,46,…
+    /// Ensures ciphertext length ≡ 1 (mod 15) so that it fits into the
+    /// 14‑byte first fragment + n·15‑byte continuation fragments.
     static func paddedLength(for original: Int,
                              step: Int = 15,
-                             offset: Int = 8) -> Int {
+                             offset: Int = 1) -> Int {
         ((Int(ceil(Double(original - offset) / Double(step)))) * step) + offset
     }
 
@@ -53,7 +55,7 @@ extension Data {
     var hex: String { map { String(format: "%02X", $0) }.joined(separator: " ") }
 }
 
-/// 16-byte AES-128 ECB encryption (no padding) via CommonCrypto
+// AES‑128‑ECB helper --------------------------------------------------------
 private func aesEncryptECB(key: [UInt8], block: [UInt8]) -> [UInt8] {
     precondition(block.count == 16 && key.count == 16)
     var out = [UInt8](repeating: 0, count: 16)
@@ -121,10 +123,8 @@ private enum MsgID: UInt8 {
 }
 
 /// Compute 13-byte nonce = [typeID | sessionNonce(8) | 0,0 | secCounter(2)]
-private func makeNonce(type: UInt8,
-                       sessionNonce: [UInt8],
-                       counter: UInt16) -> [UInt8] {
-    [type] + sessionNonce + [0, 0] + .fromUInt16(counter)
+private func makeNonce(type: UInt8, sessionNonce: [UInt8], counter: UInt16) -> [UInt8] {
+    [type] + sessionNonce + [0, 0] + .fromUInt16(counter)   // LE counter
 }
 
 /// AES-CTR (ECB-keystream) encrypt / decrypt
@@ -133,23 +133,19 @@ private func crypt(_ input: [UInt8],
                    sessionNonce: [UInt8],
                    counter: UInt16,
                    key: [UInt8]) -> [UInt8] {
-
     let nonce = makeNonce(type: type, sessionNonce: sessionNonce, counter: counter)
-    precondition(nonce.count == 13)
-
     var output = [UInt8](repeating: 0, count: input.count)
-
     var blockIndex: UInt16 = 1
     var offset = 0
     while offset < input.count {
         let keystream = aesEncryptECB(key: key,
-                                      block: [1] + nonce + .fromUInt16(blockIndex))
+                                      block: [1] + nonce + .fromUInt16(blockIndex)) // LE block idx
         let n = min(16, input.count - offset)
         let slice = Array(input[offset ..< offset + n])
-        let xorred = slice.xor(with: Array(keystream.prefix(n)))
-        output.replaceSubrange(offset ..< offset + n, with: xorred)
-        offset += n
-        blockIndex += 1
+        output.replaceSubrange(offset ..< offset + n,
+                               with: slice.xor(with: Array(keystream.prefix(n))))
+        offset      += n
+        blockIndex  += 1
     }
     return output
 }
@@ -161,23 +157,14 @@ private func authentication(for padded: [UInt8],
                             sessionNonce: [UInt8],
                             counter: UInt16,
                             key: [UInt8]) -> [UInt8] {
-
     let nonce = makeNonce(type: type, sessionNonce: sessionNonce, counter: counter)
-
-    // ❶ init - uses ORIGINAL (unpadded) len
     var state = aesEncryptECB(key: key,
-                              block: [9] + nonce + .fromUInt16(UInt16(originalLen)))
-
-    // ❷ CBC over *padded* data
+                              block: [9] + nonce + .fromUInt16(UInt16(originalLen))) // LE len
     for chunkStart in stride(from: 0, to: padded.count, by: 16) {
-        let chunk = Array(padded[chunkStart ..< min(chunkStart + 16, padded.count)])
-                       .padded(to: 16)
+        let chunk = Array(padded[chunkStart ..< min(chunkStart + 16, padded.count)]).padded(to: 16)
         state = aesEncryptECB(key: key, block: state.xor(with: chunk))
     }
-
-    // ❸ final mix
-    let s1 = aesEncryptECB(key: key,
-                           block: [1] + nonce + [0, 0])
+    let s1 = aesEncryptECB(key: key, block: [1] + nonce + [0, 0])
     return Array(Array(state.prefix(4)).xor(with: Array(s1.prefix(4))))
 }
 

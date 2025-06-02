@@ -69,15 +69,15 @@ var shouldKeepRunning = true
 keyBle.start()
     
 // Simulate incoming requests (TODO DEBUG)
+//DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+//        print("👨‍💻  Calling keyBle.requestStatus()")
+//         keyBle.requestStatus()
+//}
+//DispatchQueue.main.asyncAfter(deadline: .now() + 50) {
+//   print("👨‍💻  Calling keyBle.unlock()")
+//    keyBle.unlock()
+//}
 DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-        print("👨‍💻  Calling keyBle.requestStatus()")
-         keyBle.requestStatus()
-}
-DispatchQueue.main.asyncAfter(deadline: .now() + 50) {
-   print("👨‍💻  Calling keyBle.unlock()")
-    keyBle.unlock()
-}
-DispatchQueue.main.asyncAfter(deadline: .now() + 70) {
    print("👨‍💻  Calling keyBle.lock()")
 keyBle.lock()
 }
