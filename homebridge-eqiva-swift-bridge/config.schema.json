@@ -1,0 +1,47 @@
+{
+  "pluginAlias": "homebridge-eqiva-swift-bridge",
+  "pluginType": "platform",
+  "singular": true,
+  "strictValidation": false,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "required": true,
+        "default": "Homebridge Eqiva Swift Bridge"
+      },
+      "accessoryName": {
+        "title": "Lock Name",
+        "type": "string",
+        "required": true,
+        "default": "Eqiva Smart Lock"
+      },
+      "accessoryManufacturer": {
+        "title": "Manufacturer",
+        "type": "string",
+        "required": true,
+        "default": "Eqiva"
+      },
+      "accessoryModel": {
+        "title": "Model",
+        "type": "string",
+        "required": true,
+        "default": "eQ-3 Bluetooth Smart Lock"
+      },
+      "accessorySerial": {
+        "title": "Serial",
+        "type": "string",
+        "required": true,
+        "default": "1234567890"
+      },
+      "accessoryFirmwareRevision": {
+        "title": "Serial",
+        "type": "string",
+        "required": true,
+        "default": "1.7"
+      }
+    }
+  }
+}

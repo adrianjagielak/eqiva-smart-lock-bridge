@@ -1,0 +1,1 @@
+Homebridge Eqiva Plugin Bridge for Swift Eqiva eQ-3 Bluetooth Lock Controller.
