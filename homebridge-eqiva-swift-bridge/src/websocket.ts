@@ -15,7 +15,7 @@ export class SwiftBridge extends EventEmitter {
 
   constructor(
     public readonly log: Logging,
-    private readonly port: number,
+    port: number,
   ) {
     super();
     const wss = new WebSocketServer({ port });
