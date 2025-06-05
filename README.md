@@ -8,7 +8,7 @@ This is a personal project I built to control my Eqiva eQ-3 Bluetooth Smart Lock
 
 ## Features
 
-- macOS Swift GUI app for controlling the lock with a super stable CoreBluetooth stack.
+- macOS Swift menu bar app (runs as an icon in the top right of your screen) for controlling the lock with a super stable CoreBluetooth stack.
 - Homebridge plugin to expose the lock to HomeKit.
 - WebSocket communication between the app and plugin ensures fast, local integration.
 - GUI app is required due to macOS limitations on Bluetooth access for auto-launched background/CLI apps.
@@ -49,17 +49,7 @@ The Eqiva eQ-3 lock has terrible BLE range. Make sure the Mac running this is **
 
 ## Auto-Launching the Swift App on Boot
 
-Since macOS doesn’t allow Bluetooth access from CLI apps started via LaunchAgents or LaunchDaemons, this app needs to be launched as a GUI application. Use the following AppleScript in an Automator application to auto-launch it on login:
-
-```applescript
-tell application "System Events"
-if not (exists process "eqiva-smart-lock-bridge") then
-    tell application "eqiva-smart-lock-bridge" to activate
-end if
-end tell
-````
-
-You can save this AppleScript in Automator as an Application and add it to your Login Items in System Settings.
+Since macOS doesn’t allow Bluetooth access from CLI apps started via LaunchAgents or LaunchDaemons, this app needs to be launched as a GUI application. Enable the "Launch at Login" option to automatically start the app at login.
 
 ---
 
