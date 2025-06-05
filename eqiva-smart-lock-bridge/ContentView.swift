@@ -25,19 +25,32 @@ struct ContentView: View {
     var body: some View {
         let _ = start()
         
-        ScrollView {
-            VStack(alignment: .leading) {
+        VStack {
+            Text("Eqiva Smart Lock Bridge")
+                .font(.title2)
+                .padding()
+            HStack() {
                 LaunchAtLoginCheckbox()
-                    .padding(.bottom)
-                Text("Full log can be found at: ~/Library/Containers/dev.adrianjagielak.eqiva-smart-lock-bridge/eqiva-smart-lock-bridge.log")
-                    .padding(.bottom)
-                Text("Last 50 log lines:")
-                    .padding(.bottom)
-                Text(lastLogLinesCache.joined())
+                Spacer()
+                Button("Exit") {
+                    NSApplication.shared.terminate(nil)
+                }
             }
-            .padding()
+            .padding(.leading)
+            .padding(.trailing)
+            Divider()
+            ScrollView {
+                Text(lastLogLinesCache.joined(separator: "\n"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .rotationEffect(.degrees(180))
+            }
+            .rotationEffect(.degrees(180))
+            .frame(width: 800, height: 500)
+            Divider()
+            Text("Full log can be found at: ~/Library/Containers/dev.adrianjagielak.eqiva-smart-lock-bridge/eqiva-smart-lock-bridge.log")
+                .padding(.bottom)
         }
-        .frame(width: 800, height: 500)
     }
 }
 

@@ -14,8 +14,9 @@ private let logQueue = DispatchQueue(label: "dev.adrianjagielak.eqiva-smart-lock
 private let maxLogSize: UInt64 = 10 * 1024 * 1024 // 10MB
 
 func log(_ message: String) {
-    let logMessage = "\(logTimestamp()) \(message)\n"
-    
+    let timestamp = logTimestamp()
+    let logMessage = "\(timestamp) \(message)\n"
+
     logQueue.async {
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let logURL = documents.appendingPathComponent("eqiva-smart-lock-bridge.log")
@@ -49,7 +50,7 @@ func log(_ message: String) {
         
         print(message)
         DispatchQueue.main.async {
-            lastLogLines.append(logMessage)
+            lastLogLines.append("\(timestamp) \(message)")
             if lastLogLines.count > 50 {
                 lastLogLines.removeFirst()
             }
