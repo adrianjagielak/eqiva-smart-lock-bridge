@@ -6,24 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXCopyFilesBuildPhase section */
-		FE0F14FA2DEBC97500BC9523 /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = /usr/share/man/man1/;
-			dstSubfolderSpec = 0;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 1;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
-		FE0F14FC2DEBC97500BC9523 /* eqiva-smart-lock-bridge */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "eqiva-smart-lock-bridge"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FE0F155B2DEFC26700BC9523 /* eqiva-smart-lock-bridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "eqiva-smart-lock-bridge.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		FE0F14FE2DEBC97500BC9523 /* eqiva-smart-lock-bridge */ = {
+		FE0F155D2DEFC26700BC9523 /* eqiva-smart-lock-bridge */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "eqiva-smart-lock-bridge";
 			sourceTree = "<group>";
@@ -31,7 +19,7 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		FE0F14F92DEBC97500BC9523 /* Frameworks */ = {
+		FE0F15582DEFC26700BC9523 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -41,18 +29,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		FE0F14F32DEBC97500BC9523 = {
+		FE0F15522DEFC26700BC9523 = {
 			isa = PBXGroup;
 			children = (
-				FE0F14FE2DEBC97500BC9523 /* eqiva-smart-lock-bridge */,
-				FE0F14FD2DEBC97500BC9523 /* Products */,
+				FE0F155D2DEFC26700BC9523 /* eqiva-smart-lock-bridge */,
+				FE0F155C2DEFC26700BC9523 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		FE0F14FD2DEBC97500BC9523 /* Products */ = {
+		FE0F155C2DEFC26700BC9523 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				FE0F14FC2DEBC97500BC9523 /* eqiva-smart-lock-bridge */,
+				FE0F155B2DEFC26700BC9523 /* eqiva-smart-lock-bridge.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -60,66 +48,74 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		FE0F14FB2DEBC97500BC9523 /* eqiva-smart-lock-bridge */ = {
+		FE0F155A2DEFC26700BC9523 /* eqiva-smart-lock-bridge */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = FE0F15032DEBC97500BC9523 /* Build configuration list for PBXNativeTarget "eqiva-smart-lock-bridge" */;
+			buildConfigurationList = FE0F156A2DEFC26900BC9523 /* Build configuration list for PBXNativeTarget "eqiva-smart-lock-bridge" */;
 			buildPhases = (
-				FE0F14F82DEBC97500BC9523 /* Sources */,
-				FE0F14F92DEBC97500BC9523 /* Frameworks */,
-				FE0F14FA2DEBC97500BC9523 /* CopyFiles */,
+				FE0F15572DEFC26700BC9523 /* Sources */,
+				FE0F15582DEFC26700BC9523 /* Frameworks */,
+				FE0F15592DEFC26700BC9523 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				FE0F14FE2DEBC97500BC9523 /* eqiva-smart-lock-bridge */,
+				FE0F155D2DEFC26700BC9523 /* eqiva-smart-lock-bridge */,
 			);
 			name = "eqiva-smart-lock-bridge";
 			packageProductDependencies = (
 			);
 			productName = "eqiva-smart-lock-bridge";
-			productReference = FE0F14FC2DEBC97500BC9523 /* eqiva-smart-lock-bridge */;
-			productType = "com.apple.product-type.tool";
+			productReference = FE0F155B2DEFC26700BC9523 /* eqiva-smart-lock-bridge.app */;
+			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		FE0F14F42DEBC97500BC9523 /* Project object */ = {
+		FE0F15532DEFC26700BC9523 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1620;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
-					FE0F14FB2DEBC97500BC9523 = {
+					FE0F155A2DEFC26700BC9523 = {
 						CreatedOnToolsVersion = 16.2;
 					};
 				};
 			};
-			buildConfigurationList = FE0F14F72DEBC97500BC9523 /* Build configuration list for PBXProject "eqiva-smart-lock-bridge" */;
+			buildConfigurationList = FE0F15562DEFC26700BC9523 /* Build configuration list for PBXProject "eqiva-smart-lock-bridge" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = FE0F14F32DEBC97500BC9523;
+			mainGroup = FE0F15522DEFC26700BC9523;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = FE0F14FD2DEBC97500BC9523 /* Products */;
+			productRefGroup = FE0F155C2DEFC26700BC9523 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				FE0F14FB2DEBC97500BC9523 /* eqiva-smart-lock-bridge */,
+				FE0F155A2DEFC26700BC9523 /* eqiva-smart-lock-bridge */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		FE0F15592DEFC26700BC9523 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
-		FE0F14F82DEBC97500BC9523 /* Sources */ = {
+		FE0F15572DEFC26700BC9523 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -129,7 +125,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		FE0F15012DEBC97500BC9523 /* Debug */ = {
+		FE0F15682DEFC26900BC9523 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -192,7 +188,7 @@
 			};
 			name = Debug;
 		};
-		FE0F15022DEBC97500BC9523 /* Release */ = {
+		FE0F15692DEFC26900BC9523 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -247,24 +243,60 @@
 			};
 			name = Release;
 		};
-		FE0F15042DEBC97500BC9523 /* Debug */ = {
+		FE0F156B2DEFC26900BC9523 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "eqiva-smart-lock-bridge/eqiva_smart_lock_bridge.entitlements";
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"eqiva-smart-lock-bridge/Preview Content\"";
 				DEVELOPMENT_TEAM = 3TYF39V78Q;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "blah blah blah";
+				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "blah blah blah";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.adrianjagielak.eqiva-smart-lock-bridge";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
 		};
-		FE0F15052DEBC97500BC9523 /* Release */ = {
+		FE0F156C2DEFC26900BC9523 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "eqiva-smart-lock-bridge/eqiva_smart_lock_bridge.entitlements";
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"eqiva-smart-lock-bridge/Preview Content\"";
 				DEVELOPMENT_TEAM = 3TYF39V78Q;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "blah blah blah";
+				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "blah blah blah";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.adrianjagielak.eqiva-smart-lock-bridge";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -272,25 +304,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		FE0F14F72DEBC97500BC9523 /* Build configuration list for PBXProject "eqiva-smart-lock-bridge" */ = {
+		FE0F15562DEFC26700BC9523 /* Build configuration list for PBXProject "eqiva-smart-lock-bridge" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				FE0F15012DEBC97500BC9523 /* Debug */,
-				FE0F15022DEBC97500BC9523 /* Release */,
+				FE0F15682DEFC26900BC9523 /* Debug */,
+				FE0F15692DEFC26900BC9523 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		FE0F15032DEBC97500BC9523 /* Build configuration list for PBXNativeTarget "eqiva-smart-lock-bridge" */ = {
+		FE0F156A2DEFC26900BC9523 /* Build configuration list for PBXNativeTarget "eqiva-smart-lock-bridge" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				FE0F15042DEBC97500BC9523 /* Debug */,
-				FE0F15052DEBC97500BC9523 /* Release */,
+				FE0F156B2DEFC26900BC9523 /* Debug */,
+				FE0F156C2DEFC26900BC9523 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = FE0F14F42DEBC97500BC9523 /* Project object */;
+	rootObject = FE0F15532DEFC26700BC9523 /* Project object */;
 }

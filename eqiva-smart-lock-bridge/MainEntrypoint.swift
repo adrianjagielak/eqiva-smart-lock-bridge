@@ -83,14 +83,14 @@ final class SmartLockController: NSObject {
 
 extension SmartLockController: EqivaLockDelegate {
     func eqivaLockDidConnect(_ lock: EqivaLock) {
-        print("\(logTimestamp()) 🔒 Lock connected")
+        log("🔒 Lock connected")
         lockConnected = true
         flushPending()
         lock.getStatus { _ in }
     }
 
     func eqivaLockDidDisconnect(_ lock: EqivaLock) {
-        print("\(logTimestamp()) ⚠️  Lock disconnected")
+        log("⚠️  Lock disconnected")
         lockConnected = false
         scheduleLockReconnect()
     }
@@ -100,18 +100,18 @@ extension SmartLockController: EqivaLockDelegate {
     }
 
     private func connectLock() {
-        print("\(logTimestamp()) 🔍 Connecting to lock…")
+        log("🔍 Connecting to lock…")
         lock.connect { [weak self] result in
             guard let self else { return }
             if case .failure(let err) = result {
-                print("\(logTimestamp()) ❌ Lock connect failed: \(err.localizedDescription)")
+                log("❌ Lock connect failed: \(err.localizedDescription)")
                 self.scheduleLockReconnect()
             }
         }
     }
 
     private func scheduleLockReconnect() {
-        print("\(logTimestamp()) ⏳ Reconnecting lock in \(Int(lockReconnectDelay)) s")
+        log("⏳ Reconnecting lock in \(Int(lockReconnectDelay)) s")
         queue.asyncAfter(deadline: .now() + lockReconnectDelay) { [weak self] in
             self?.connectLock()
         }
@@ -126,7 +126,7 @@ extension SmartLockController: EqivaLockDelegate {
     private func dispatch(_ cmd: EqivaCommand) {
         lock.send(cmd) { [weak self] result in
             if case .failure(let err) = result {
-                print("\(logTimestamp()) ❌ Failed to send command: \(err.localizedDescription)")
+                log("❌ Failed to send command: \(err.localizedDescription)")
             } else if case .success(let status) = result {
                 self?.send(status: status)
             }
@@ -139,7 +139,7 @@ extension SmartLockController: EqivaLockDelegate {
 extension SmartLockController: URLSessionWebSocketDelegate {
 
     private func connectWebSocket() {
-        print("\(logTimestamp()) 🌐 Connecting WebSocket → \(webSocketURL.absoluteString)…")
+        log("🌐 Connecting WebSocket → \(webSocketURL.absoluteString)…")
         wsTask = urlSession.webSocketTask(with: webSocketURL)
         wsTask?.resume()
         listen()
@@ -161,7 +161,7 @@ extension SmartLockController: URLSessionWebSocketDelegate {
                 }
                 listen()
             case .failure(let err):
-                print("\(logTimestamp()) ❌ WebSocket error: \(err.localizedDescription)")
+                log("❌ WebSocket error: \(err.localizedDescription)")
                 wsTask?.cancel()
                 scheduleWSReconnect()
             }
@@ -170,19 +170,19 @@ extension SmartLockController: URLSessionWebSocketDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                             didOpenWithProtocol protocol: String?) {
-        print("\(logTimestamp()) ✅ WebSocket connected")
+        log("✅ WebSocket connected")
         wsReconnectTask?.cancel()
         lock.getStatus { _ in }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                             didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        print("\(logTimestamp()) ⚠️  WebSocket closed (code \(closeCode.rawValue))")
+        log("⚠️  WebSocket closed (code \(closeCode.rawValue))")
         scheduleWSReconnect()
     }
 
     private func scheduleWSReconnect() {
-        print("\(logTimestamp()) ⏳ Reconnecting WebSocket in \(Int(wsReconnectDelay)) s")
+        log("⏳ Reconnecting WebSocket in \(Int(wsReconnectDelay)) s")
 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -201,7 +201,7 @@ extension SmartLockController: URLSessionWebSocketDelegate {
 
     private func handleCommand(_ raw: String) {
         guard let cmd = IncomingCommand(rawValue: raw.lowercased()) else {
-            print("\(logTimestamp()) ⚠️  Unknown command ‘\(raw)’ received via WebSocket")
+            log("⚠️  Unknown command ‘\(raw)’ received via WebSocket")
             return
         }
         queue.async { [weak self] in
@@ -222,7 +222,7 @@ extension SmartLockController: URLSessionWebSocketDelegate {
         guard let data = try? JSONEncoder().encode(msg),
               let str = String(data: data, encoding: .utf8) else { return }
         wsTask?.send(.string(str)) { err in
-            if let err { print("\(logTimestamp()) ❌ WS send failed: \(err.localizedDescription)") }
+            if let err { log("❌ WS send failed: \(err.localizedDescription)") }
         }
     }
 }
@@ -245,20 +245,19 @@ private extension LockState {
 
 // MARK: ‑‑ Main ‑‑
 
-let controller = SmartLockController(userKeyHex: userKeyHex, userID: userID)
-controller.start()
+func mainEntrypoint() {
+    let controller = SmartLockController(userKeyHex: userKeyHex, userID: userID)
+    controller.start()
 
+    func _ping(){
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+            log("Ping")
+            if controller.lock.state == .ready || controller.lock.state == .secured {
+                controller.lock.getStatus { _ in }
+            }
 
-func _ping(){
-    DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-        print("\(logTimestamp()) Ping")
-        if         controller.lock.state == .ready || controller.lock.state == .secured {
-            controller.lock.getStatus { _ in }
+            _ping()
         }
-
-        _ping()
     }
+    _ping()
 }
-_ping()
-
-RunLoop.main.run()

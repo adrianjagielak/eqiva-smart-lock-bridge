@@ -475,7 +475,7 @@ public final class EqivaLock: NSObject {
         }
         let frag = frags[index]
         awaitingAckStatus = frag.isLast ? nil : frag.status      // need ACK for non‑last fragments
-        print("\(logTimestamp()) [BLE] Sending:  \(frag.data.hex)")
+        log("[BLE] Sending:  \(frag.data.hex)")
         p.writeValue(frag.data, for: char, type: .withResponse)
         if frag.isLast { return } // next fragment will be triggered by ACK
     }
@@ -518,7 +518,7 @@ public final class EqivaLock: NSObject {
 
 extension EqivaLock: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        print("\(logTimestamp()) Starting Bluetooth scan")
+        log("Starting Bluetooth scan")
         guard central.state == .poweredOn else {
             connectCompletion?(.failure(EqivaLockError.bluetoothOff))
             return
@@ -529,7 +529,7 @@ extension EqivaLock: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String : Any], rssi: NSNumber) {
-        print("\(logTimestamp()) Discovered eQ-3 smart lock (\"\(p.name ?? "(no name)")\" @ \(p.identifier.uuidString), rssi: \(rssi)")
+        log("Discovered eQ-3 smart lock (\"\(p.name ?? "(no name)")\" @ \(p.identifier.uuidString), rssi: \(rssi)")
         c.stopScan()
         state = .connecting
         peripheral = p
@@ -538,14 +538,14 @@ extension EqivaLock: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
-        print("\(logTimestamp()) Connected")
+        log("Connected")
         state = .ready
         delegate?.eqivaLockDidConnect(self)
         p.discoverServices([Self.serviceUUID])
     }
 
     public func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
-        print("\(logTimestamp()) Disconnected")
+        log("Disconnected")
         reset()
         delegate?.eqivaLockDidDisconnect(self)
     }
@@ -555,13 +555,13 @@ extension EqivaLock: CBCentralManagerDelegate {
 
 extension EqivaLock: CBPeripheralDelegate {
     public func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
-        print("\(logTimestamp()) Discovered BLE services")
+        log("Discovered BLE services")
         guard let svc = p.services?.first(where: { $0.uuid == Self.serviceUUID }) else { return }
         p.discoverCharacteristics([Self.txUUID, Self.rxUUID], for: svc)
     }
 
     public func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor svc: CBService, error: Error?) {
-        print("\(logTimestamp()) Discovered BLE characteristics")
+        log("Discovered BLE characteristics")
         for ch in svc.characteristics ?? [] {
             if ch.uuid == Self.txUUID {
                 txChar = ch
@@ -576,7 +576,7 @@ extension EqivaLock: CBPeripheralDelegate {
 
     public func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
         guard let raw = ch.value, let frag = Fragment(raw: raw) else { return }
-        print("\(logTimestamp()) [BLE] Received: \(raw.hex)")
+        log("[BLE] Received: \(raw.hex)")
         if frag.isFirst { inFragments.removeAll() }
         inFragments.append(frag)
 
@@ -638,7 +638,7 @@ extension EqivaLock: CBPeripheralDelegate {
                                   counter: ctr)
 
             guard mac == authRx else {
-                print("\(logTimestamp()) ⚠️  MAC mismatch – discarding frame")
+                log("⚠️  MAC mismatch – discarding frame")
                 disconnect()
                 return
             }
@@ -652,7 +652,7 @@ extension EqivaLock: CBPeripheralDelegate {
                 pump()
             }
             if let st = st {
-                print("\(logTimestamp()) Received state: \(st)")
+                log("Received state: \(st)")
                 delegate?.eqivaLock(self, didUpdateStatus: st)
             }
         case .answerWithoutSecurity:
