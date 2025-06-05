@@ -6,6 +6,7 @@ import {
 import { SwiftBridge } from './websocket.js';
 import { StatusMessage, SwiftLockState } from './types.js';
 import { HomebridgeEqivaSwiftBridgePlatform } from './platform.js';
+import { sortStatusJsonForLogging } from './utils.js';
 
 export class EqivaLockAccessory {
   private readonly lockService: Service;
@@ -70,7 +71,7 @@ export class EqivaLockAccessory {
   }
 
   private handleStatus(msg: StatusMessage): void {
-    this.platform.log.debug('Status from Swift:', msg);
+    this.platform.log.debug('Status from Swift:', sortStatusJsonForLogging(msg));
 
     if (msg.state !== SwiftLockState.moving) {
       this.currentState = this.swiftToHKCurrent(msg.state);

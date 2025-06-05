@@ -10,4 +10,5 @@ export enum SwiftLockState {
 export interface StatusMessage {
   state: SwiftLockState;
   batteryLow: boolean;
+  [key: string]: unknown;
 }
