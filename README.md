@@ -12,6 +12,12 @@ This is a personal project I built to control my Eqiva eQ-3 Bluetooth Smart Lock
 - Homebridge plugin to expose the lock to HomeKit.
 - WebSocket communication between the app and plugin ensures fast, local integration.
 - GUI app is required due to macOS limitations on Bluetooth access for auto-launched background/CLI apps.
+* Manual override switches: Due to occasional firmware quirks where the lock can end up in an incorrect or unknown state (e.g., stuck or misreporting its status), the plugin includes additional HomeKit switches for **Lock**, **Unlock**, and **Open**. These act as emergency controls, allowing you to manually force a command regardless of what state HomeKit thinks the lock is in. This is particularly helpful when the lock jams or becomes unresponsive to standard commands.
+
+  > 💡 **Tip:** To avoid cluttering the lock accessory view, go into the lock's settings in the Home app, and enable **Show as Separate Tiles** to hide manual override switches from the default Home view.
+
+Let me know if you'd like that tip styled differently or moved into its own section.
+
 
 ## Getting Started
 
