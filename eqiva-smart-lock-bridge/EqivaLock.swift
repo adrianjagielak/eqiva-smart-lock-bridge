@@ -529,7 +529,7 @@ extension EqivaLock: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String : Any], rssi: NSNumber) {
-        log("Discovered eQ-3 smart lock (\"\(p.name ?? "(no name)")\" @ \(p.identifier.uuidString), rssi: \(rssi)")
+        log("Discovered eQ-3 smart lock (\"\(p.name ?? "(no name)")\" @ \(p.identifier.uuidString), rssi: \(rssi))")
         c.stopScan()
         state = .connecting
         peripheral = p
