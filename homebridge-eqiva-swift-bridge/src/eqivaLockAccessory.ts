@@ -12,8 +12,7 @@ export class EqivaLockAccessory {
   private readonly lockService: Service;
   private readonly batteryService: Service;
 
-  private currentState: number;
-  private targetState: number;
+  private targetState?: number;
 
   private targetStateResolver?: () => void;
 
@@ -22,9 +21,6 @@ export class EqivaLockAccessory {
     private readonly accessory: PlatformAccessory,
     private readonly swift: SwiftBridge,
   ) {
-    this.currentState = this.platform.Characteristic.LockCurrentState.UNKNOWN;
-    this.targetState = this.platform.Characteristic.LockTargetState.SECURED;
-
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, this.platform.config.accessoryManufacturer)
       .setCharacteristic(this.platform.Characteristic.Model, this.platform.config.accessoryModel)
@@ -74,8 +70,8 @@ export class EqivaLockAccessory {
     this.platform.log.debug('Status from Swift:', sortStatusJsonForLogging(msg));
 
     if (msg.state !== SwiftLockState.moving) {
-      this.currentState = this.swiftToHKCurrent(msg.state);
-      this.lockService.updateCharacteristic(this.platform.Characteristic.LockCurrentState, this.currentState);
+      const currentState = this.swiftToHKCurrent(msg.state);
+      this.lockService.updateCharacteristic(this.platform.Characteristic.LockCurrentState, currentState);
 
       // Resolve the pending set Promise if any
       if (this.targetStateResolver) {
@@ -83,8 +79,9 @@ export class EqivaLockAccessory {
         this.targetStateResolver = undefined;
       }
 
-      this.targetState = this.swiftToHKTarget(msg.state);
-      this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.targetState);
+      if (this.targetState) {
+        this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.targetState);
+      }
     }
     
     const batteryLevel = msg.batteryLow
@@ -109,11 +106,5 @@ export class EqivaLockAccessory {
     default:
       return this.platform.Characteristic.LockCurrentState.UNKNOWN;
     }
-  }
-
-  private swiftToHKTarget(state: SwiftLockState): number {
-    return this.swiftToHKCurrent(state) === this.platform.Characteristic.LockCurrentState.SECURED
-      ? this.platform.Characteristic.LockTargetState.SECURED
-      : this.platform.Characteristic.LockTargetState.UNSECURED;
   }
 }
