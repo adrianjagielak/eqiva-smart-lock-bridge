@@ -74,7 +74,7 @@ final class SmartLockController: NSObject {
     func start() {
         queue.async {
             self.connectLock()
-            self.connectWebSocket()
+            self.scheduleWSReconnect()
         }
     }
 }
