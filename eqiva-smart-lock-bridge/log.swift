@@ -7,6 +7,9 @@
 
 import Foundation
 
+var onLogUpdated: (() -> Void)?
+var lastLogLines: [String] = []
+
 private let logQueue = DispatchQueue(label: "dev.adrianjagielak.eqiva-smart-lock-bridge.logger", qos: .background)
 private let maxLogSize: UInt64 = 10 * 1024 * 1024 // 10MB
 
@@ -42,6 +45,15 @@ func log(_ message: String) {
             } else {
                 try? data.write(to: logURL)
             }
+        }
+        
+        print(message)
+        DispatchQueue.main.async {
+            lastLogLines.append(logMessage)
+            if lastLogLines.count > 50 {
+                lastLogLines.removeFirst()
+            }
+            onLogUpdated?()
         }
     }
 }

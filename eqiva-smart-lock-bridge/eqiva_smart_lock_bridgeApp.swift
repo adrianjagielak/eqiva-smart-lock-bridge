@@ -16,6 +16,7 @@ struct eqiva_smart_lock_bridgeApp: App {
             guard !hasStarted else { return }
             hasStarted = true
             
+            log("Starting in 5s...")
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 mainEntrypoint()
             }
@@ -25,9 +26,9 @@ struct eqiva_smart_lock_bridgeApp: App {
     var body: some Scene {
         let _ = start()
         
-        Window(Text("Eqiva Smart Lock Bridge"), id: "window0") {
+        MenuBarExtra("Eqiva Smart Lock Bridge", systemImage: "dot.radiowaves.left.and.right") {
             ContentView()
-                }
-                .menuBarExtraStyle(.window)
+        }
+        .menuBarExtraStyle(.window)
     }
 }

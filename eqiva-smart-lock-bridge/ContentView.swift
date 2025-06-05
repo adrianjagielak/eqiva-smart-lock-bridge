@@ -8,12 +8,36 @@
 import SwiftUI
 
 struct ContentView: View {
-    var body: some View {
-        VStack {
-            Text("Running.")
-            LaunchAtLoginCheckbox()
+    @State var hasStarted = false
+    @State var lastLogLinesCache: [String] = []
+
+    func start() {
+        // dirty hack; I don't care
+        
+        DispatchQueue.main.async {
+            lastLogLinesCache = lastLogLines
         }
-        .padding()
+        onLogUpdated = {
+            lastLogLinesCache = lastLogLines
+        }
+    }
+
+    var body: some View {
+        let _ = start()
+        
+        ScrollView {
+            VStack(alignment: .leading) {
+                LaunchAtLoginCheckbox()
+                    .padding(.bottom)
+                Text("Full log can be found at: ~/Library/Containers/dev.adrianjagielak.eqiva-smart-lock-bridge/eqiva-smart-lock-bridge.log")
+                    .padding(.bottom)
+                Text("Last 50 log lines:")
+                    .padding(.bottom)
+                Text(lastLogLinesCache.joined())
+            }
+            .padding()
+        }
+        .frame(width: 800, height: 500)
     }
 }
 
