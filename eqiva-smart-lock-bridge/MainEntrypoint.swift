@@ -12,12 +12,6 @@
 
 import Foundation
 
-// MARK: ‑‑ Configuration ‑‑
-
-private let userKeyHex = "1234567890abcdef1234567890abcdef"
-private let userID: UInt8 = 123
-private let webSocketURL = URL(string: "ws://localhost:9099")!
-
 // MARK: ‑‑ Helper Types ‑‑
 
 private struct StatusMessage: Codable {
@@ -41,6 +35,10 @@ private enum IncomingCommand: String {
 // MARK: ‑‑ SmartLockController ‑‑
 
 final class SmartLockController: NSObject {
+    // Configuration
+    private let userKeyHex: String
+    private let userID: UInt8
+    private let webSocketURL: URL
 
     // BLE
     fileprivate let lock: EqivaLock
@@ -65,7 +63,10 @@ final class SmartLockController: NSObject {
 
     // MARK: Init / start
 
-    init(userKeyHex: String, userID: UInt8) {
+    init(userKeyHex: String, userID: UInt8, webSocketURL: URL) {
+        self.userKeyHex = userKeyHex
+        self.userID = userID
+        self.webSocketURL = webSocketURL
         self.lock = EqivaLock(userKeyHex: userKeyHex, userID: userID)
         super.init()
         self.lock.delegate = self
@@ -245,8 +246,8 @@ private extension LockState {
 
 // MARK: ‑‑ Main ‑‑
 
-func mainEntrypoint() {
-    let controller = SmartLockController(userKeyHex: userKeyHex, userID: userID)
+func mainEntrypoint(userKeyHex: String, userID: UInt8, webSocketURL: URL) {
+    let controller = SmartLockController(userKeyHex: userKeyHex, userID: userID, webSocketURL: webSocketURL)
     controller.start()
 
     func _ping(){

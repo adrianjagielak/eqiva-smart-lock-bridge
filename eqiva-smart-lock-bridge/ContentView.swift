@@ -10,6 +10,9 @@ import SwiftUI
 struct ContentView: View {
     @State var hasStarted = false
     @State var lastLogLinesCache: [String] = []
+    @AppStorage("userKeyHex") var userKeyHex = ""
+    @AppStorage("userID") var userID = ""
+    @AppStorage("webSocketURL") var webSocketURL = "ws://localhost:9099"
 
     func start() {
         // dirty hack; I don't care
@@ -34,6 +37,26 @@ struct ContentView: View {
                 Spacer()
                 Button("Exit") {
                     NSApplication.shared.terminate(nil)
+                }
+            }
+            .padding(.leading)
+            .padding(.trailing)
+            Divider()
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("User Key")
+                    TextField("abcdef1234567890abcdef1234567890", text: $userKeyHex)
+                        .textFieldStyle(.roundedBorder)
+                }
+                VStack(alignment: .leading) {
+                    Text("User ID")
+                    TextField("1", text: $userID)
+                        .textFieldStyle(.roundedBorder)
+                }
+                VStack(alignment: .leading) {
+                    Text("WebSocket URL")
+                    TextField("ws://localhost:9099", text: $webSocketURL)
+                        .textFieldStyle(.roundedBorder)
                 }
             }
             .padding(.leading)
