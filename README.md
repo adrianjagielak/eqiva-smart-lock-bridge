@@ -25,25 +25,15 @@ Let me know if you'd like that tip styled differently or moved into its own sect
 
 You need a `userKey` and `userID` from your lock. Use the [`keyble-registeruser`](https://github.com/oyooyo/keyble) command-line tool to obtain these.
 
-### 2. Configure the Swift App
+### 2. Download and Run the Swift App
 
-Edit `eqiva-smart-lock-bridge/MainEntrypoint.swift` and insert your `userKey` and `userID` in the appropriate section.
+Download the app from the [Releases](https://github.com/adrianjagielak/eqiva-smart-lock-bridge/releases/latest) page. Run it, enter your credentials, and then restart the app.
 
-### 3. Build and Run the Swift App
-
-Build the app using Xcode and run it. It must remain running, as it maintains the active BLE connection to your lock.
-
-### 4. Install the Homebridge Plugin
+### 3. Install the Homebridge Plugin
 
 Search for `homebridge-eqiva-swift-bridge` in the Homebridge UI and install it. It's published to NPM and can be installed like any other Homebridge plugin.
 
-### 5. Make Sure They Run on the Same macOS Machine
-
-Both the Swift app and Homebridge plugin **must** run on the same macOS machine, as they communicate over WebSocket via `localhost`.
-
-> You *can* modify the code to communicate over LAN if you want to run them on separate machines, but that's not the default behavior.
-
-### 6. Bluetooth Range Matters
+### Bluetooth Range Matters
 
 The Eqiva eQ-3 lock has terrible BLE range. Make sure the Mac running this is **physically close** to the lock. I’ve got a Mac mini in the hallway about 2 meters from the lock and it works great.
 
