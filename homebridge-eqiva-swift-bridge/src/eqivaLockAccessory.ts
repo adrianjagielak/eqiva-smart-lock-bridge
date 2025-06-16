@@ -12,8 +12,6 @@ export class EqivaLockAccessory {
   private readonly lockService: Service;
   private readonly batteryService: Service;
 
-  private targetState?: number;
-
   private targetStateResolver?: () => void;
 
   constructor(
@@ -78,8 +76,6 @@ export class EqivaLockAccessory {
         this.swift.send('unlock');
       }
 
-      this.targetState = value as number;
-
       // Store the resolver to be called when a stable state is received
       this.targetStateResolver = resolve;
     });
@@ -98,9 +94,7 @@ export class EqivaLockAccessory {
         this.targetStateResolver = undefined;
       }
 
-      if (this.targetState) {
-        this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.targetState);
-      }
+      this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.swiftToHKTarget(msg.state));
     }
     
     const batteryLevel = msg.batteryLow
@@ -125,5 +119,11 @@ export class EqivaLockAccessory {
     default:
       return this.platform.Characteristic.LockCurrentState.UNKNOWN;
     }
+  }
+
+  private swiftToHKTarget(state: SwiftLockState): number {
+    return this.swiftToHKCurrent(state) === this.platform.Characteristic.LockCurrentState.SECURED
+      ? this.platform.Characteristic.LockTargetState.SECURED
+      : this.platform.Characteristic.LockTargetState.UNSECURED;
   }
 }
