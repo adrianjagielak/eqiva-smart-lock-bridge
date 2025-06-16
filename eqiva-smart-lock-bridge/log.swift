@@ -51,7 +51,7 @@ func log(_ message: String) {
         print(message)
         DispatchQueue.main.async {
             lastLogLines.append("\(timestamp) \(message)")
-            if lastLogLines.count > 50 {
+            if lastLogLines.count > 500 {
                 lastLogLines.removeFirst()
             }
             onLogUpdated?()
