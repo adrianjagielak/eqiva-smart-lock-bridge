@@ -638,8 +638,9 @@ extension EqivaLock: CBPeripheralDelegate {
                                   counter: ctr)
 
             guard mac == authRx else {
-                log("⚠️  MAC mismatch – discarding frame")
+                log("⚠️  MAC mismatch – reconnecting")
                 disconnect()
+                delegate?.eqivaLockDidDisconnect(self)
                 return
             }
             remoteCounter = ctr &+ 1        // keep if you ever want replay-protection
