@@ -71,7 +71,7 @@ struct ContentView: View {
             .rotationEffect(.degrees(180))
             .frame(width: 800, height: 500)
             Divider()
-            Text("Full log can be found at: ~/Library/Containers/dev.adrianjagielak.eqiva-smart-lock-bridge/eqiva-smart-lock-bridge.log")
+            Text("Full log can be found at: ~/Documents/eqiva-smart-lock-bridge.log")
                 .padding(.bottom)
         }
     }

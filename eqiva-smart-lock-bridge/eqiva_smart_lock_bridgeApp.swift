@@ -24,7 +24,7 @@ struct eqiva_smart_lock_bridgeApp: App {
             let webSocketURL = URL(string: self.webSocketURL)
             
             guard !userKeyHex.isEmpty, let userID = userID, let webSocketURL = webSocketURL else {
-                log("Please provide valid User Key, User ID, and WebSocket URL and restart the app.")
+                log("Please provide a valid User Key, User ID, and WebSocket URL, then restart the app.")
                 return
             }
             
