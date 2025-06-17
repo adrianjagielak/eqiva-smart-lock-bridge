@@ -37,7 +37,7 @@
         "default": "1234567890"
       },
       "accessoryFirmwareRevision": {
-        "title": "Serial",
+        "title": "Firmware",
         "type": "string",
         "required": true,
         "default": "1.7"
