@@ -2,7 +2,7 @@
   "name": "homebridge-eqiva-swift-bridge",
   "displayName": "Homebridge Eqiva Swift Bridge",
   "type": "module",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Homebridge Eqiva Plugin Bridge for Swift Eqiva eQ-3 Bluetooth Lock Controller.",
   "author": "Adrian Jagielak",
   "license": "Apache-2.0",
