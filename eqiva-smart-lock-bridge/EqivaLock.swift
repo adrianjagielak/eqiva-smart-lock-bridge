@@ -364,8 +364,8 @@ public final class EqivaLock: NSObject {
 
     private var connectCompletion: ((Result<Void, Error>) -> Void)?
 
-     enum ConnState { case idle, scanning, connecting, ready, secured }
-     var state: ConnState = .idle
+    enum ConnState { case idle, scanning, connecting, ready, secured }
+    var state: ConnState = .idle
 
     // ––– Crypto/session
     private var userKey: [UInt8]

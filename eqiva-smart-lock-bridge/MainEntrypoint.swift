@@ -246,15 +246,33 @@ private extension LockState {
 
 // MARK: ‑‑ Main ‑‑
 
+private var lastStatusDate: Date = Date()
+
+private func checkLastStatusDate() {
+    let timeSinceLastStatus = Date().timeIntervalSince(lastStatusDate);
+    
+    if timeSinceLastStatus > 300 {
+        restartApp()
+    }
+    
+    if timeSinceLastStatus > 150 {
+        log("Last status response was \(timeSinceLastStatus)s ago. Restarting the app in \(300 - timeSinceLastStatus)s.")
+    }
+}
+
 func mainEntrypoint(userKeyHex: String, userID: UInt8, webSocketURL: URL) {
     let controller = SmartLockController(userKeyHex: userKeyHex, userID: userID, webSocketURL: webSocketURL)
     controller.start()
 
     func _ping(){
         DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-            log("Ping")
+            checkLastStatusDate()
+
             if controller.lock.state == .ready || controller.lock.state == .secured {
-                controller.lock.getStatus { _ in }
+                log("Ping")
+                controller.lock.getStatus { _ in
+                    lastStatusDate = Date()
+                }
             }
 
             _ping()
